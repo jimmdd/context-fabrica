@@ -73,7 +73,13 @@ The design keeps the canonical memory model separate from any one backend so the
 
 ## Quickstart
 
-Verified source-first setup:
+Verified package install:
+
+```bash
+python -m pip install .
+```
+
+Verified source-first setup for active development:
 
 ```bash
 cd context-fabrica
@@ -83,7 +89,7 @@ python -m pip install -r requirements-dev.txt
 pytest
 ```
 
-For the easiest local semantic pipeline with real embeddings:
+Runtime dependencies for the full v2 path:
 
 ```bash
 python -m pip install -r requirements-v2.txt
@@ -107,6 +113,10 @@ Default embedding behavior:
 - if you explicitly want sentence-transformers -> install it separately and pass your own embedder instance
 
 Note on packaging: the repository includes package metadata and console-script entrypoints, but the **verified path in this repo today is source-first execution** (`requirements-*.txt` + `PYTHONPATH=src`).
+
+For CLI users, the current practical split is:
+- `python -m pip install .` -> base package + console scripts
+- `python -m pip install -r requirements-v2.txt` -> Postgres/Kuzu runtime dependencies
 
 ## Python Usage
 
@@ -274,6 +284,14 @@ Projection worker examples:
 ```bash
 python scripts/run_projector.py --once
 PYTHONPATH=src python -m context_fabrica.projector_cli --once
+PYTHONPATH=src python -m context_fabrica.projector_cli --status
+PYTHONPATH=src python -m context_fabrica.projector_cli --retry-failed
+```
+
+Bootstrap command:
+
+```bash
+PYTHONPATH=src python -m context_fabrica.bootstrap_cli --root . --dsn "postgresql:///context_fabrica"
 ```
 
 See `docs/v2-architecture.md` for the exact split between the databases.

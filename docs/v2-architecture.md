@@ -52,6 +52,7 @@ This keeps ingestion, provenance, freshness, invalidation, and embeddings in one
 - easier backups and migrations
 - avoids dual-write drift between vector and graph stores
 - executable live repository API now exists for bootstrap, record write, chunk write, relation write, fetch, and semantic search
+- package install for the base command surface now works, while the full v2 runtime remains a separately verifiable dependency layer
 
 ## Kuzu Deferred Responsibilities
 
@@ -72,6 +73,12 @@ Important fields added for curation:
 - `memory_stage`
 - `memory_kind`
 - `reviewed_at`
+
+Operational controls now include:
+
+- projection queue status listing
+- retrying failed jobs
+- requeueing projection for a specific record
 
 ## Embedding Strategy
 
