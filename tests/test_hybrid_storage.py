@@ -80,6 +80,7 @@ def test_write_record_calls_postgres_write_methods(mocker) -> None:
     upsert = mocker.patch.object(store.postgres, "upsert_record")
     replace_chunks = mocker.patch.object(store.postgres, "replace_chunks")
     replace_relations = mocker.patch.object(store.postgres, "replace_relations")
+    enqueue_projection = mocker.patch.object(store.postgres, "enqueue_projection")
 
     record = KnowledgeRecord(
         record_id="r-live",
@@ -94,3 +95,42 @@ def test_write_record_calls_postgres_write_methods(mocker) -> None:
     upsert.assert_called_once_with(record)
     replace_chunks.assert_called_once()
     replace_relations.assert_called_once_with(record.record_id, plan.postgres_relation_rows)
+    enqueue_projection.assert_called_once_with(record.record_id)
+
+
+def test_write_text_generates_chunks_with_default_embedder(mocker) -> None:
+    store = HybridMemoryStore(
+        HybridStoreSettings(
+            postgres=PostgresSettings(dsn="postgresql://localhost/test"),
+            kuzu=KuzuSettings(path="./tmp-kuzu"),
+        )
+    )
+    write_record = mocker.patch.object(store, "write_record")
+    record = KnowledgeRecord(record_id="r2", text="alpha " * 300, source="design-doc", confidence=0.8)
+
+    store.write_text(record)
+
+    assert write_record.called
+    chunks = write_record.call_args.kwargs["chunks"]
+    assert len(chunks) > 1
+
+
+def test_promote_record_persists_promotion_provenance(mocker) -> None:
+    store = HybridMemoryStore(
+        HybridStoreSettings(
+            postgres=PostgresSettings(dsn="postgresql://localhost/test"),
+            kuzu=KuzuSettings(path="./tmp-kuzu"),
+        )
+    )
+    record = KnowledgeRecord(record_id="draft-promote", text="Draft TODO", stage="staged", kind="note")
+    fetch = mocker.patch.object(store.postgres, "fetch_record", return_value=record)
+    upsert = mocker.patch.object(store.postgres, "upsert_record")
+    record_promotion = mocker.patch.object(store.postgres, "record_promotion")
+    enqueue = mocker.patch.object(store.postgres, "enqueue_projection")
+
+    promoted = store.promote_record("draft-promote", reason="reviewed")
+
+    fetch.assert_called_once_with("draft-promote")
+    upsert.assert_called_once_with(promoted)
+    record_promotion.assert_called_once()
+    enqueue.assert_called_once_with("draft-promote")
