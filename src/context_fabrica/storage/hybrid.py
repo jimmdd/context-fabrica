@@ -30,6 +30,9 @@ class HybridMemoryStore:
             "kuzu": self.kuzu.bootstrap_statements(),
         }
 
+    def bootstrap_postgres(self) -> None:
+        self.postgres.bootstrap()
+
     def write_plan(self, record: KnowledgeRecord) -> HybridWritePlan:
         projection = build_graph_projection(record)
         relation_rows = [
@@ -47,3 +50,26 @@ class HybridMemoryStore:
             ),
             graph_projection=projection,
         )
+
+    def write_record(
+        self,
+        record: KnowledgeRecord,
+        *,
+        chunks: list[tuple[str, list[float], int]] | None = None,
+    ) -> HybridWritePlan:
+        plan = self.write_plan(record)
+        self.postgres.upsert_record(record)
+        if chunks is not None:
+            self.postgres.replace_chunks(record.record_id, chunks)
+        if plan.postgres_relation_rows:
+            self.postgres.replace_relations(record.record_id, plan.postgres_relation_rows)
+        return plan
+
+    def semantic_search(
+        self,
+        query_embedding: list[float],
+        *,
+        domain: str | None = None,
+        top_k: int = 5,
+    ) -> list:
+        return self.postgres.semantic_search(query_embedding, domain=domain, top_k=top_k)
