@@ -53,12 +53,32 @@ class PostgresPgvectorAdapter:
             "target_entity TEXT NOT NULL, "
             "weight DOUBLE PRECISION NOT NULL DEFAULT 1.0"
             ");",
+            f"CREATE TABLE IF NOT EXISTS {schema}.memory_promotions ("
+            "promotion_id BIGSERIAL PRIMARY KEY, "
+            "source_record_id TEXT NOT NULL REFERENCES {schema}.memory_records(record_id) ON DELETE CASCADE, "
+            "target_record_id TEXT NOT NULL REFERENCES {schema}.memory_records(record_id) ON DELETE CASCADE, "
+            "promoted_at TIMESTAMPTZ NOT NULL, "
+            "reason TEXT NOT NULL, "
+            "UNIQUE (source_record_id, target_record_id)"
+            ");".replace("{schema}", schema),
+            f"CREATE TABLE IF NOT EXISTS {schema}.projection_jobs ("
+            "job_id BIGSERIAL PRIMARY KEY, "
+            "record_id TEXT NOT NULL REFERENCES {schema}.memory_records(record_id) ON DELETE CASCADE, "
+            "job_type TEXT NOT NULL DEFAULT 'project_record', "
+            "status TEXT NOT NULL DEFAULT 'pending', "
+            "attempt_count INTEGER NOT NULL DEFAULT 0, "
+            "last_error TEXT NULL, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "UNIQUE (record_id, job_type)"
+            ");".replace("{schema}", schema),
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_domain ON {schema}.memory_records(domain);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_stage ON {schema}.memory_records(memory_stage);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_validity ON {schema}.memory_records(valid_from, valid_to);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_relations_source ON {schema}.memory_relations(source_entity);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_relations_target ON {schema}.memory_relations(target_entity);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_chunks_embedding ON {schema}.memory_chunks USING hnsw (embedding vector_cosine_ops);",
+            f"CREATE INDEX IF NOT EXISTS idx_{schema}_projection_jobs_status ON {schema}.projection_jobs(status, updated_at);",
         ]
 
     def upsert_record_statement(self) -> str:
@@ -113,6 +133,41 @@ class PostgresPgvectorAdapter:
             f"FROM {schema}.memory_records WHERE record_id = %s;"
         )
 
+    def insert_promotion_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"INSERT INTO {schema}.memory_promotions (source_record_id, target_record_id, promoted_at, reason) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (source_record_id, target_record_id) DO UPDATE SET "
+            "promoted_at = EXCLUDED.promoted_at, reason = EXCLUDED.reason;"
+        )
+
+    def enqueue_projection_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"INSERT INTO {schema}.projection_jobs (record_id, job_type, status, attempt_count, last_error, created_at, updated_at) "
+            "VALUES (%s, 'project_record', 'pending', 0, NULL, now(), now()) "
+            "ON CONFLICT (record_id, job_type) DO UPDATE SET "
+            "status = 'pending', updated_at = now(), last_error = NULL;"
+        )
+
+    def claim_projection_jobs_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"UPDATE {schema}.projection_jobs j SET status = 'processing', attempt_count = attempt_count + 1, updated_at = now() "
+            "WHERE j.job_id IN ("
+            f"SELECT job_id FROM {schema}.projection_jobs WHERE status = 'pending' ORDER BY created_at LIMIT %s"
+            ") RETURNING job_id, record_id;"
+        )
+
+    def complete_projection_job_statement(self) -> str:
+        schema = self.settings.schema
+        return f"UPDATE {schema}.projection_jobs SET status = 'done', updated_at = now(), last_error = NULL WHERE job_id = %s;"
+
+    def fail_projection_job_statement(self) -> str:
+        schema = self.settings.schema
+        return f"UPDATE {schema}.projection_jobs SET status = 'failed', updated_at = now(), last_error = %s WHERE job_id = %s;"
+
     def search_statement(self) -> str:
         schema = self.settings.schema
         return (
@@ -161,6 +216,12 @@ class PostgresPgvectorAdapter:
                 cur.execute(self.upsert_record_statement(), self.upsert_record_payload(record))
             conn.commit()
 
+    def record_promotion(self, source_record_id: str, target_record_id: str, reason: str, promoted_at) -> None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.insert_promotion_statement(), (source_record_id, target_record_id, promoted_at, reason))
+            conn.commit()
+
     def replace_chunks(self, record_id: str, chunks: list[tuple[str, list[float], int]]) -> None:
         conn = self.connect()
         with conn:
@@ -181,6 +242,32 @@ class PostgresPgvectorAdapter:
                 cur.execute(self.delete_relations_statement(), (record_id,))
                 for row in relations:
                     cur.execute(self.replace_relations_statement(), row)
+            conn.commit()
+
+    def enqueue_projection(self, record_id: str) -> None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.enqueue_projection_statement(), (record_id,))
+            conn.commit()
+
+    def claim_projection_jobs(self, limit: int = 10) -> list[tuple[int, str]]:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.claim_projection_jobs_statement(), (limit,))
+                rows = cur.fetchall()
+            conn.commit()
+        return [(int(row[0]), str(row[1])) for row in rows]
+
+    def complete_projection_job(self, job_id: int) -> None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.complete_projection_job_statement(), (job_id,))
+            conn.commit()
+
+    def fail_projection_job(self, job_id: int, error: str) -> None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.fail_projection_job_statement(), (error, job_id))
             conn.commit()
 
     def fetch_record(self, record_id: str) -> KnowledgeRecord | None:

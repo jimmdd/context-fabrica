@@ -29,12 +29,15 @@ def test_live_postgres_write_and_query() -> None:
         confidence=0.95,
     )
     embedding = [0.01] * 1536
-    store.write_record(record, chunks=[(record.text, embedding, 0)])
+    store.write_text(record)
 
     fetched = store.postgres.fetch_record("live-auth-1")
     assert fetched is not None
     assert fetched.record_id == "live-auth-1"
     assert fetched.stage == "canonical"
 
-    results = store.semantic_search(embedding, domain="platform", top_k=3)
+    results = store.semantic_search(store.embedder.embed(record.text), domain="platform", top_k=3)
     assert any(hit.record.record_id == "live-auth-1" for hit in results)
+
+    promoted = store.promote_record("live-auth-1", reason="integration-check")
+    assert promoted.reviewed_at is not None
