@@ -9,6 +9,7 @@ from .entity import extract_entities, extract_relations
 from .graph import KnowledgeGraph
 from .index import LexicalSemanticIndex
 from .models import KnowledgeRecord, QueryResult, Relation
+from .policy import decide_memory_tier, promote_record
 
 
 class DomainMemoryEngine:
@@ -37,6 +38,7 @@ class DomainMemoryEngine:
         tags: Iterable[str] | None = None,
         metadata: dict[str, object] | None = None,
         record_id: str | None = None,
+        auto_stage: bool = True,
     ) -> KnowledgeRecord:
         rid = record_id or str(uuid4())
         record = KnowledgeRecord(
@@ -48,6 +50,11 @@ class DomainMemoryEngine:
             tags=list(tags or []),
             metadata=dict(metadata or {}),
         )
+        if auto_stage:
+            decision = decide_memory_tier(record)
+            record.stage = decision.stage
+            record.kind = decision.kind
+            record.metadata.setdefault("promotion_rationale", decision.rationale)
         self._records[rid] = record
         self._index.upsert(rid, text)
 
@@ -67,6 +74,7 @@ class DomainMemoryEngine:
         domain: str | None = None,
         now: datetime | None = None,
         as_of: datetime | None = None,
+        include_staged: bool = False,
     ) -> list[QueryResult]:
         ref_now = now or datetime.now(tz=timezone.utc)
         point_in_time = as_of or ref_now
@@ -79,6 +87,8 @@ class DomainMemoryEngine:
         if domain:
             all_ids = {rid for rid in all_ids if self._records[rid].domain == domain}
         all_ids = {rid for rid in all_ids if self._is_valid(self._records[rid], point_in_time)}
+        if not include_staged:
+            all_ids = {rid for rid in all_ids if self._records[rid].stage != "staged"}
 
         sem_max = max(semantic.values(), default=1.0)
         graph_max = max(graph.values(), default=1.0)
@@ -143,6 +153,9 @@ class DomainMemoryEngine:
         record = self._records[record_id]
         record.valid_to = invalidated_at or datetime.now(tz=timezone.utc)
         record.metadata["invalid_reason"] = reason
+
+    def promote_record(self, record_id: str, *, reviewed_at: datetime | None = None) -> KnowledgeRecord:
+        return promote_record(self._records[record_id], reviewed_at=reviewed_at)
 
     def _is_valid(self, record: KnowledgeRecord, at: datetime) -> bool:
         if at < record.valid_from:

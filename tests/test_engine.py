@@ -83,3 +83,21 @@ def test_invalidated_record_is_filtered_from_current_queries() -> None:
     results = engine.query("What is the build command?", top_k=2)
     assert results
     assert all(hit.record.record_id != "old" for hit in results)
+
+
+def test_staged_record_is_hidden_until_promoted() -> None:
+    engine = DomainMemoryEngine()
+    staged = engine.ingest(
+        "Draft note: TODO investigate flaky auth refresh.",
+        source="scratchpad",
+        confidence=0.4,
+        record_id="draft-1",
+    )
+
+    assert staged.stage == "staged"
+    assert not engine.query("flaky auth refresh", top_k=3)
+
+    engine.promote_record("draft-1")
+    promoted_results = engine.query("flaky auth refresh", top_k=3)
+    assert promoted_results
+    assert promoted_results[0].record.record_id == "draft-1"
