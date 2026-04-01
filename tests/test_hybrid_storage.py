@@ -13,6 +13,7 @@ def test_postgres_bootstrap_includes_pgvector_schema() -> None:
     assert any("CREATE EXTENSION IF NOT EXISTS vector" in statement for statement in bootstrap)
     assert any("memory_records" in statement for statement in bootstrap)
     assert any("memory_chunks" in statement for statement in bootstrap)
+    assert any("memory_stage" in statement for statement in bootstrap)
 
 
 def test_kuzu_bootstrap_includes_record_and_entity_tables() -> None:
@@ -51,6 +52,7 @@ def test_write_plan_generates_postgres_payload_and_graph_projection() -> None:
     assert "authservice" in plan.graph_projection.entities
     assert any(row[2] == "DEPENDS_ON" for row in plan.postgres_relation_rows)
     assert any("MERGE (r:MemoryRecord" in statement for statement in plan.kuzu_projection_statements)
+    assert plan.postgres_record_payload[5] == "canonical"
 
 
 def test_postgres_search_statement_filters_by_domain_and_validity() -> None:
@@ -65,3 +67,4 @@ def test_postgres_search_statement_filters_by_domain_and_validity() -> None:
     assert "r.domain = $2" in statement
     assert "r.valid_from <= $3" in statement
     assert "r.valid_to IS NULL OR r.valid_to >= $3" in statement
+    assert "r.memory_stage <> 'staged'" in statement

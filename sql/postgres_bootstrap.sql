@@ -8,13 +8,20 @@ CREATE TABLE IF NOT EXISTS context_fabrica.memory_records (
     source TEXT NOT NULL,
     domain TEXT NOT NULL,
     confidence DOUBLE PRECISION NOT NULL,
+    memory_stage TEXT NOT NULL DEFAULT 'canonical',
+    memory_kind TEXT NOT NULL DEFAULT 'fact',
     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL,
     valid_from TIMESTAMPTZ NOT NULL,
     valid_to TIMESTAMPTZ NULL,
-    supersedes TEXT NULL
+    supersedes TEXT NULL,
+    reviewed_at TIMESTAMPTZ NULL
 );
+
+ALTER TABLE context_fabrica.memory_records ADD COLUMN IF NOT EXISTS memory_stage TEXT NOT NULL DEFAULT 'canonical';
+ALTER TABLE context_fabrica.memory_records ADD COLUMN IF NOT EXISTS memory_kind TEXT NOT NULL DEFAULT 'fact';
+ALTER TABLE context_fabrica.memory_records ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL;
 
 CREATE TABLE IF NOT EXISTS context_fabrica.memory_chunks (
     chunk_id BIGSERIAL PRIMARY KEY,
@@ -34,6 +41,7 @@ CREATE TABLE IF NOT EXISTS context_fabrica.memory_relations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_context_fabrica_records_domain ON context_fabrica.memory_records(domain);
+CREATE INDEX IF NOT EXISTS idx_context_fabrica_records_stage ON context_fabrica.memory_records(memory_stage);
 CREATE INDEX IF NOT EXISTS idx_context_fabrica_records_validity ON context_fabrica.memory_records(valid_from, valid_to);
 CREATE INDEX IF NOT EXISTS idx_context_fabrica_relations_source ON context_fabrica.memory_relations(source_entity);
 CREATE INDEX IF NOT EXISTS idx_context_fabrica_relations_target ON context_fabrica.memory_relations(target_entity);

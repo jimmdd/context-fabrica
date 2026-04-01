@@ -4,36 +4,45 @@ INSERT INTO context_fabrica.memory_records (
     source,
     domain,
     confidence,
+    memory_stage,
+    memory_kind,
     tags,
     metadata,
     created_at,
     valid_from,
     valid_to,
-    supersedes
+    supersedes,
+    reviewed_at
 ) VALUES (
     'smoke-auth-1',
     'AuthService depends on TokenSigner and calls KeyStore.',
     'smoke-test',
     'platform',
     0.92,
+    'canonical',
+    'fact',
     '["auth", "platform"]'::jsonb,
     '{"repo": "context-fabrica", "kind": "smoke-test"}'::jsonb,
     now(),
     now(),
     NULL,
-    NULL
+    NULL,
+    now()
 )
 ON CONFLICT (record_id) DO UPDATE SET
     text_content = EXCLUDED.text_content,
     source = EXCLUDED.source,
     domain = EXCLUDED.domain,
     confidence = EXCLUDED.confidence,
+    memory_stage = EXCLUDED.memory_stage,
+    memory_kind = EXCLUDED.memory_kind,
     tags = EXCLUDED.tags,
     metadata = EXCLUDED.metadata,
     created_at = EXCLUDED.created_at,
     valid_from = EXCLUDED.valid_from,
     valid_to = EXCLUDED.valid_to,
-    supersedes = EXCLUDED.supersedes;
+    supersedes = EXCLUDED.supersedes,
+    reviewed_at = EXCLUDED.reviewed_at;
 
 DELETE FROM context_fabrica.memory_chunks WHERE record_id = 'smoke-auth-1';
 INSERT INTO context_fabrica.memory_chunks (record_id, chunk_text, embedding, chunk_index)
