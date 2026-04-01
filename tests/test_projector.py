@@ -26,6 +26,15 @@ class _FakePostgres:
     def fail_projection_job(self, job_id: int, error: str) -> None:
         self.failed.append((job_id, error))
 
+    def list_projection_jobs(self, limit: int = 25):
+        return [(1, "r1", "pending", 0, "", object(), object())]
+
+    def retry_failed_jobs(self):
+        return [(2, "r2")]
+
+    def requeue_record_projection(self, record_id: str):
+        return (3, record_id)
+
 
 class _FakeKuzu:
     def __init__(self) -> None:

@@ -16,6 +16,9 @@ def main() -> None:
     parser.add_argument("--kuzu-path", default="./var/context-fabrica-graph")
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--status", action="store_true")
+    parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument("--requeue-record")
     args = parser.parse_args()
 
     Path(args.kuzu_path).parent.mkdir(parents=True, exist_ok=True)
@@ -27,6 +30,16 @@ def main() -> None:
         PostgresPgvectorAdapter(settings.postgres),
         KuzuGraphProjectionAdapter(settings.kuzu),
     )
+    if args.status:
+        for row in worker.postgres.list_projection_jobs(limit=args.batch_size):
+            print(row)
+        return
+    if args.retry_failed:
+        print(worker.postgres.retry_failed_jobs())
+        return
+    if args.requeue_record:
+        print(worker.postgres.requeue_record_projection(args.requeue_record))
+        return
     if args.once:
         print(worker.process_pending(limit=args.batch_size))
         return

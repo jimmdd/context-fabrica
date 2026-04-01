@@ -168,6 +168,29 @@ class PostgresPgvectorAdapter:
         schema = self.settings.schema
         return f"UPDATE {schema}.projection_jobs SET status = 'failed', updated_at = now(), last_error = %s WHERE job_id = %s;"
 
+    def list_projection_jobs_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"SELECT job_id, record_id, status, attempt_count, coalesce(last_error, ''), created_at, updated_at "
+            f"FROM {schema}.projection_jobs ORDER BY updated_at DESC LIMIT %s;"
+        )
+
+    def retry_failed_jobs_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"UPDATE {schema}.projection_jobs SET status = 'pending', updated_at = now(), last_error = NULL "
+            "WHERE status = 'failed' RETURNING job_id, record_id;"
+        )
+
+    def requeue_record_projection_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"INSERT INTO {schema}.projection_jobs (record_id, job_type, status, attempt_count, last_error, created_at, updated_at) "
+            "VALUES (%s, 'project_record', 'pending', 0, NULL, now(), now()) "
+            "ON CONFLICT (record_id, job_type) DO UPDATE SET status = 'pending', updated_at = now(), last_error = NULL "
+            "RETURNING job_id, record_id;"
+        )
+
     def search_statement(self) -> str:
         schema = self.settings.schema
         return (
@@ -269,6 +292,34 @@ class PostgresPgvectorAdapter:
             with conn.cursor() as cur:
                 cur.execute(self.fail_projection_job_statement(), (error, job_id))
             conn.commit()
+
+    def list_projection_jobs(self, limit: int = 25) -> list[tuple[int, str, str, int, str, object, object]]:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.list_projection_jobs_statement(), (limit,))
+                rows = cur.fetchall()
+        return [
+            (int(row[0]), str(row[1]), str(row[2]), int(row[3]), str(row[4]), row[5], row[6])
+            for row in rows
+        ]
+
+    def retry_failed_jobs(self) -> list[tuple[int, str]]:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.retry_failed_jobs_statement())
+                rows = cur.fetchall()
+            conn.commit()
+        return [(int(row[0]), str(row[1])) for row in rows]
+
+    def requeue_record_projection(self, record_id: str) -> tuple[int, str] | None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.requeue_record_projection_statement(), (record_id,))
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            return None
+        return (int(row[0]), str(row[1]))
 
     def fetch_record(self, record_id: str) -> KnowledgeRecord | None:
         conn = self.connect()
