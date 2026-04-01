@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 var/
 tmp_meta/
+.context_fabrica/
+build/

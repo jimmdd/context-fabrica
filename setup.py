@@ -15,17 +15,11 @@ setup(
         "context_fabrica",
         "context_fabrica.storage",
     ],
-    extras_require={
-        "dev": ["pytest>=8.0"],
-        "embeddings": ["fastembed>=0.4"],
-        "postgres": ["psycopg[binary]>=3.2", "pgvector>=0.3"],
-        "kuzu": ["kuzu>=0.8"],
-        "v2": ["psycopg[binary]>=3.2", "pgvector>=0.3", "kuzu>=0.8", "fastembed>=0.4"],
-    },
     entry_points={
         "console_scripts": [
             "context-fabrica=context_fabrica.cli:main",
             "context-fabrica-demo=context_fabrica.demo_cli:main",
+            "context-fabrica-bootstrap=context_fabrica.bootstrap_cli:main",
             "context-fabrica-projector=context_fabrica.projector_cli:main",
             "context-fabrica-project-memory=context_fabrica.project_memory_cli:main",
         ]
