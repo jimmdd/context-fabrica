@@ -19,6 +19,7 @@ This keeps ingestion, provenance, freshness, invalidation, and embeddings in one
 - provenance and metadata
 - typed relation rows
 - promotion/invalidation history
+- projection job queue
 
 ### Kuzu owns
 
@@ -32,8 +33,9 @@ This keeps ingestion, provenance, freshness, invalidation, and embeddings in one
 1. Agent writes or updates a `KnowledgeRecord`.
 2. A promotion policy classifies it into `staged`, `canonical`, or `pattern`.
 3. Postgres stores the canonical record state, chunk embeddings, and typed relation rows.
-4. Projection extracts entities and typed relations.
-5. Kuzu receives projected `MemoryRecord`, `Entity`, `HAS_ENTITY`, and `RELATED` edges.
+4. Canonical/pattern writes enqueue a projection job in Postgres.
+5. Projection extracts entities and typed relations.
+6. Kuzu receives projected `MemoryRecord`, `Entity`, `HAS_ENTITY`, and `RELATED` edges.
 
 ## Read Flow
 
@@ -62,12 +64,20 @@ Kuzu is not the source of truth for raw text, provenance, or lifecycle policy. I
 - `memory_records`
 - `memory_chunks`
 - `memory_relations`
+- `memory_promotions`
+- `projection_jobs`
 
 Important fields added for curation:
 
 - `memory_stage`
 - `memory_kind`
 - `reviewed_at`
+
+## Embedding Strategy
+
+- default: dimension-safe `HashEmbedder` for zero-friction local installs
+- optional: `FastEmbed` when using 384-d schemas for stronger local embeddings
+- advanced: custom embedder injection for sentence-transformers or hosted providers
 
 ### Kuzu tables
 

@@ -12,7 +12,7 @@ so agents can reason about both **what is relevant** and **how concepts are conn
 ## Status
 
 - `v0.1`: in-process prototype engine is working and tested
-- `v2 scaffold`: `Postgres + pgvector` write-authority model and optional `Kuzu` projection are implemented as adapters and schema plans
+- `v2 executable`: `Postgres + pgvector` write-authority model now supports live bootstrap, write, fetch, semantic search, promotion provenance, and projection job enqueueing
 - local Postgres bootstrap and smoke test are working
 
 This repo is currently best understood as an **architecture-first working prototype**: the core retrieval model works, the storage split is real, and the next step is wiring full live ingestion/query execution end to end.
@@ -73,13 +73,40 @@ The design keeps the canonical memory model separate from any one backend so the
 
 ## Quickstart
 
+Verified source-first setup:
+
 ```bash
 cd context-fabrica
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
+python -m pip install -r requirements-dev.txt
 pytest
 ```
+
+For the easiest local semantic pipeline with real embeddings:
+
+```bash
+python -m pip install -r requirements-v2.txt
+```
+
+Single happy-path demo:
+
+```bash
+PYTHONPATH=src python -m context_fabrica.demo_cli --dsn "postgresql:///context_fabrica" --project
+```
+
+This command will:
+- bootstrap the Postgres schema
+- ingest one demo record with automatic chunking + embedding
+- run semantic search
+- optionally project pending jobs into Kuzu
+
+Default embedding behavior:
+- no extra dependency required -> dimension-safe local `HashEmbedder`
+- if you configure `embedding_dimensions=384` and install `fastembed` manually -> `FastEmbed` is used automatically
+- if you explicitly want sentence-transformers -> install it separately and pass your own embedder instance
+
+Note on packaging: the repository includes package metadata and console-script entrypoints, but the **verified path in this repo today is source-first execution** (`requirements-*.txt` + `PYTHONPATH=src`).
 
 ## Python Usage
 
@@ -211,16 +238,55 @@ store.write_record(record, chunks=[(record.text, embedding, 0)])
 hits = store.semantic_search(embedding, domain="platform", top_k=3)
 ```
 
+Auto chunking + embedding example:
+
+```python
+from context_fabrica import HybridMemoryStore, HybridStoreSettings, KuzuSettings, PostgresSettings
+from context_fabrica.models import KnowledgeRecord
+
+store = HybridMemoryStore(
+    HybridStoreSettings(
+        postgres=PostgresSettings(dsn="postgresql:///context_fabrica", embedding_dimensions=1536),
+        kuzu=KuzuSettings(path="./var/context-fabrica-graph"),
+    )
+)
+
+store.bootstrap_postgres()
+store.write_text(
+    KnowledgeRecord(
+        record_id="service-auth-1",
+        text="AuthService depends on TokenSigner and calls KeyStore. The service is owned by Platform.",
+        source="design-doc",
+        domain="platform",
+        confidence=0.9,
+    )
+)
+```
+
+Promotion provenance example:
+
+```python
+store.promote_record("draft-note-1", reason="reviewed-by-agent")
+```
+
+Projection worker examples:
+
+```bash
+python scripts/run_projector.py --once
+PYTHONPATH=src python -m context_fabrica.projector_cli --once
+```
+
 See `docs/v2-architecture.md` for the exact split between the databases.
 
 Current v2 components in the repo:
 - `HybridMemoryStore` for write-plan composition
 - `PostgresPgvectorAdapter` for canonical storage schema and live execution methods
 - `KuzuGraphProjectionAdapter` for relation projection statements
+- `GraphProjectionWorker` for queued Postgres -> graph projection
 - `policy.py` for staged/canonical/pattern routing and promotion decisions
 - local Postgres bootstrap in `sql/postgres_bootstrap.sql`
 - local smoke verification in `scripts/verify_local_postgres.sh`
-- deterministic repo bootstrap/status tool in `scripts/project_memory.py`
+- deterministic repo bootstrap/status tool in `scripts/project_memory.py` and `context-fabrica-project-memory`
 
 ## Curated Memory Tiers
 
@@ -239,6 +305,8 @@ repeated reusable structure -> mined -> pattern
 
 The in-memory engine and Postgres search path both respect this distinction by filtering out staged memories by default.
 
+Promotion provenance is stored in Postgres so canonicalization can be replayed and audited.
+
 ## Deterministic Project Memory Tooling
 
 Inspired by claude-scholar's low-freedom project-memory scripts, `context-fabrica` now includes:
@@ -246,6 +314,7 @@ Inspired by claude-scholar's low-freedom project-memory scripts, `context-fabric
 ```bash
 python scripts/project_memory.py bootstrap --root .
 python scripts/project_memory.py status --root .
+PYTHONPATH=src python -m context_fabrica.project_memory_cli bootstrap --root .
 ```
 
 This creates a repo-local structure for:
@@ -294,6 +363,8 @@ Current checks that pass in this repo:
 - local `Postgres 18 + pgvector` schema bootstrap
 - local smoke insert/query for records, chunks, and relation rows
 - live Python integration test for bootstrap + write + fetch + semantic search
+- chunking and embedding unit tests
+- projection worker unit tests
 - staged-memory promotion policy tests
 - deterministic project-memory bootstrap/status script tests
 - static diagnostics with zero Python errors in `src/` and `tests/`
@@ -310,13 +381,11 @@ Current checks that pass in this repo:
 ## Next Milestones
 
 1. Wire real Postgres read/write execution into the package API
-2. Add chunking + embedding ingestion for arbitrary live records
-3. Add projection worker from canonical Postgres rows into graph backend
-4. Add promotion provenance + idempotent promotion records
-5. Add promotion review queues and agent-assisted conflict handling
-6. Add conflict handling (`supersedes`, contradiction sets, as-of queries)
-7. Add weighted-RRF and calibrated fusion modes
-8. Add tenant-aware namespaces and memory lifecycle policies (TTL/decay/archival)
+2. Add projector state observability and retry controls
+3. Add promotion review queues and agent-assisted conflict handling
+4. Add conflict handling (`supersedes`, contradiction sets, as-of queries)
+5. Add weighted-RRF and calibrated fusion modes
+6. Add tenant-aware namespaces and memory lifecycle policies (TTL/decay/archival)
 
 ## Roadmap
 
