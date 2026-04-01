@@ -31,7 +31,7 @@ This keeps ingestion, provenance, freshness, invalidation, and embeddings in one
 
 1. Agent writes or updates a `KnowledgeRecord`.
 2. A promotion policy classifies it into `staged`, `canonical`, or `pattern`.
-3. Postgres stores the canonical record state and chunk embeddings.
+3. Postgres stores the canonical record state, chunk embeddings, and typed relation rows.
 4. Projection extracts entities and typed relations.
 5. Kuzu receives projected `MemoryRecord`, `Entity`, `HAS_ENTITY`, and `RELATED` edges.
 
@@ -49,6 +49,7 @@ This keeps ingestion, provenance, freshness, invalidation, and embeddings in one
 - easier invalidation and replay
 - easier backups and migrations
 - avoids dual-write drift between vector and graph stores
+- executable live repository API now exists for bootstrap, record write, chunk write, relation write, fetch, and semantic search
 
 ## Kuzu Deferred Responsibilities
 

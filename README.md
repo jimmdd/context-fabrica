@@ -25,6 +25,8 @@ This repo is currently best understood as an **architecture-first working protot
 
 This keeps durable memory, provenance, freshness, and embeddings in Postgres while letting relation-heavy traversals move into a graph store when needed.
 
+The Postgres side is now executable, not just declarative: the adapter can bootstrap schema, upsert records, replace chunks, replace relations, fetch records, and run semantic search against a live local Postgres instance.
+
 Recent improvement inspired by `claude-scholar`:
 - memory is now treated as **curated in layers**, not as one flat pool
 - `staged` notes are excluded from default retrieval until promoted
@@ -181,11 +183,39 @@ record = KnowledgeRecord(
 plan = store.write_plan(record)
 ```
 
+Live Postgres example:
+
+```python
+from context_fabrica import HybridMemoryStore, HybridStoreSettings, KuzuSettings, PostgresSettings
+from context_fabrica.models import KnowledgeRecord
+
+store = HybridMemoryStore(
+    HybridStoreSettings(
+        postgres=PostgresSettings(dsn="postgresql:///context_fabrica"),
+        kuzu=KuzuSettings(path="./var/context-fabrica-graph"),
+    )
+)
+
+store.bootstrap_postgres()
+
+record = KnowledgeRecord(
+    record_id="auth-live-1",
+    text="AuthService depends on TokenSigner and calls KeyStore.",
+    source="design-doc",
+    domain="platform",
+    confidence=0.9,
+)
+
+embedding = [0.01] * 1536
+store.write_record(record, chunks=[(record.text, embedding, 0)])
+hits = store.semantic_search(embedding, domain="platform", top_k=3)
+```
+
 See `docs/v2-architecture.md` for the exact split between the databases.
 
 Current v2 components in the repo:
 - `HybridMemoryStore` for write-plan composition
-- `PostgresPgvectorAdapter` for canonical storage schema and query statements
+- `PostgresPgvectorAdapter` for canonical storage schema and live execution methods
 - `KuzuGraphProjectionAdapter` for relation projection statements
 - `policy.py` for staged/canonical/pattern routing and promotion decisions
 - local Postgres bootstrap in `sql/postgres_bootstrap.sql`
@@ -263,6 +293,7 @@ Current checks that pass in this repo:
 - `python3 -m pytest`
 - local `Postgres 18 + pgvector` schema bootstrap
 - local smoke insert/query for records, chunks, and relation rows
+- live Python integration test for bootstrap + write + fetch + semantic search
 - staged-memory promotion policy tests
 - deterministic project-memory bootstrap/status script tests
 - static diagnostics with zero Python errors in `src/` and `tests/`
@@ -279,12 +310,13 @@ Current checks that pass in this repo:
 ## Next Milestones
 
 1. Wire real Postgres read/write execution into the package API
-2. Add chunking + embedding ingestion for live records
+2. Add chunking + embedding ingestion for arbitrary live records
 3. Add projection worker from canonical Postgres rows into graph backend
-4. Add promotion review queues and agent-assisted conflict handling
-5. Add conflict handling (`supersedes`, contradiction sets, as-of queries)
-6. Add weighted-RRF and calibrated fusion modes
-7. Add tenant-aware namespaces and memory lifecycle policies (TTL/decay/archival)
+4. Add promotion provenance + idempotent promotion records
+5. Add promotion review queues and agent-assisted conflict handling
+6. Add conflict handling (`supersedes`, contradiction sets, as-of queries)
+7. Add weighted-RRF and calibrated fusion modes
+8. Add tenant-aware namespaces and memory lifecycle policies (TTL/decay/archival)
 
 ## Roadmap
 
