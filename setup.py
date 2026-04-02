@@ -20,6 +20,7 @@ setup(
             "context-fabrica=context_fabrica.cli:main",
             "context-fabrica-demo=context_fabrica.demo_cli:main",
             "context-fabrica-bootstrap=context_fabrica.bootstrap_cli:main",
+            "context-fabrica-doctor=context_fabrica.doctor_cli:main",
             "context-fabrica-projector=context_fabrica.projector_cli:main",
             "context-fabrica-project-memory=context_fabrica.project_memory_cli:main",
         ]

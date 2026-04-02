@@ -1,3 +1,5 @@
+from typing import Optional
+
 from src.context_fabrica.storage.projector import GraphProjectionWorker
 
 
@@ -34,6 +36,12 @@ class _FakePostgres:
 
     def requeue_record_projection(self, record_id: str):
         return (3, record_id)
+
+    def requeue_canonical_projection(self, domain: Optional[str] = None):
+        return [(4, domain or "all")]
+
+    def projection_queue_summary(self):
+        return {"pending": 1, "done": 2}
 
 
 class _FakeKuzu:

@@ -191,6 +191,29 @@ class PostgresPgvectorAdapter:
             "RETURNING job_id, record_id;"
         )
 
+    def requeue_canonical_projection_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"INSERT INTO {schema}.projection_jobs (record_id, job_type, status, attempt_count, last_error, created_at, updated_at) "
+            f"SELECT record_id, 'project_record', 'pending', 0, NULL, now(), now() FROM {schema}.memory_records "
+            "WHERE memory_stage IN ('canonical', 'pattern') "
+            "AND (%s::text IS NULL OR domain = %s) "
+            "ON CONFLICT (record_id, job_type) DO UPDATE SET status = 'pending', updated_at = now(), last_error = NULL "
+            "RETURNING job_id, record_id;"
+        )
+
+    def projection_queue_summary_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            f"SELECT status, count(*) FROM {schema}.projection_jobs GROUP BY status ORDER BY status;"
+        )
+
+    def health_probe_statement(self) -> str:
+        schema = self.settings.schema
+        return (
+            "SELECT current_database(), current_user, exists (select 1 from pg_extension where extname = 'vector');"
+        )
+
     def search_statement(self) -> str:
         schema = self.settings.schema
         return (
@@ -320,6 +343,36 @@ class PostgresPgvectorAdapter:
         if row is None:
             return None
         return (int(row[0]), str(row[1]))
+
+    def requeue_canonical_projection(self, domain: str | None = None) -> list[tuple[int, str]]:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.requeue_canonical_projection_statement(), (domain, domain))
+                rows = cur.fetchall()
+            conn.commit()
+        return [(int(row[0]), str(row[1])) for row in rows]
+
+    def projection_queue_summary(self) -> dict[str, int]:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.projection_queue_summary_statement())
+                rows = cur.fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
+    def health_probe(self) -> dict[str, object]:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(self.health_probe_statement())
+                row = cur.fetchone()
+        if row is None:
+            return {"ok": False}
+        return {
+            "ok": True,
+            "database": str(row[0]),
+            "user": str(row[1]),
+            "vector_extension": bool(row[2]),
+            "queue": self.projection_queue_summary(),
+        }
 
     def fetch_record(self, record_id: str) -> KnowledgeRecord | None:
         conn = self.connect()

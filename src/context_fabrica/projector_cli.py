@@ -19,6 +19,8 @@ def main() -> None:
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--requeue-record")
+    parser.add_argument("--requeue-all-canonical", action="store_true")
+    parser.add_argument("--requeue-domain")
     args = parser.parse_args()
 
     Path(args.kuzu_path).parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +41,9 @@ def main() -> None:
         return
     if args.requeue_record:
         print(worker.postgres.requeue_record_projection(args.requeue_record))
+        return
+    if args.requeue_all_canonical or args.requeue_domain:
+        print(worker.postgres.requeue_canonical_projection(domain=args.requeue_domain))
         return
     if args.once:
         print(worker.process_pending(limit=args.batch_size))
