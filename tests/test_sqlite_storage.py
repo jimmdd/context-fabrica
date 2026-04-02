@@ -159,3 +159,108 @@ def test_sqlite_end_to_end_via_hybrid_store(tmp_path) -> None:
     results = store.semantic_search(query_vec, domain="platform", top_k=3)
     assert len(results) >= 1
     assert results[0].record.record_id == "e2e-1"
+
+
+def test_sqlite_delete_record_cascades(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+    embedder = HashEmbedder(dimensions=64)
+
+    record = KnowledgeRecord(record_id="r1", text="to delete", source="doc", confidence=0.8)
+    store.upsert_record(record)
+    store.replace_chunks("r1", [("to delete", embedder.embed("to delete"), 0)])
+    store.replace_relations("r1", [("r1", "a", "DEPENDS_ON", "b", 1.0)])
+
+    assert store.delete_record("r1")
+    assert store.fetch_record("r1") is None
+    assert store.conn.execute("SELECT count(*) FROM memory_chunks WHERE record_id='r1'").fetchone()[0] == 0
+    assert store.conn.execute("SELECT count(*) FROM memory_relations WHERE record_id='r1'").fetchone()[0] == 0
+    assert not store.delete_record("nonexistent")
+    store.close()
+
+
+def test_sqlite_list_records(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+
+    store.upsert_record(KnowledgeRecord(record_id="r1", text="a", source="doc", domain="platform", confidence=0.8))
+    store.upsert_record(KnowledgeRecord(record_id="r2", text="b", source="doc", domain="platform", stage="staged", confidence=0.4))
+    store.upsert_record(KnowledgeRecord(record_id="r3", text="c", source="doc", domain="billing", confidence=0.8))
+
+    all_records = store.list_records()
+    assert len(all_records) == 3
+
+    platform = store.list_records(domain="platform")
+    assert len(platform) == 2
+    assert all(r.domain == "platform" for r in platform)
+
+    staged = store.list_records(stage="staged")
+    assert len(staged) == 1
+    assert staged[0].record_id == "r2"
+
+    limited = store.list_records(limit=1)
+    assert len(limited) == 1
+    store.close()
+
+
+def test_sqlite_batch_upsert(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+
+    records = [
+        KnowledgeRecord(record_id=f"batch-{i}", text=f"record {i}", source="bulk", confidence=0.8)
+        for i in range(5)
+    ]
+    store.upsert_records(records)
+
+    all_records = store.list_records()
+    assert len(all_records) == 5
+    store.close()
+
+
+def test_sqlite_fetch_record_with_chunks(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+    embedder = HashEmbedder(dimensions=64)
+
+    record = KnowledgeRecord(record_id="r1", text="test with chunks", source="doc", confidence=0.8)
+    store.upsert_record(record)
+    emb = embedder.embed("test with chunks")
+    store.replace_chunks("r1", [("chunk 0", emb, 0), ("chunk 1", emb, 1)])
+
+    result = store.fetch_record_with_chunks("r1")
+    assert result is not None
+    rec, chunks = result
+    assert rec.record_id == "r1"
+    assert len(chunks) == 2
+    assert chunks[0][0] == "chunk 0"
+    assert chunks[1][2] == 1  # chunk_index
+
+    assert store.fetch_record_with_chunks("nonexistent") is None
+    store.close()
+
+
+def test_sqlite_semantic_search_returns_complete_records(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+    embedder = HashEmbedder(dimensions=64)
+
+    record = KnowledgeRecord(
+        record_id="r1",
+        text="auth service",
+        source="design-doc",
+        domain="platform",
+        confidence=0.9,
+        tags=["auth", "critical"],
+        metadata={"team": "platform", "reviewed": True},
+    )
+    store.upsert_record(record)
+    store.replace_chunks("r1", [("auth service", embedder.embed(record.text), 0)])
+
+    results = store.semantic_search(embedder.embed("auth"), top_k=1)
+    assert len(results) == 1
+    hit = results[0].record
+    assert hit.tags == ["auth", "critical"]
+    assert hit.metadata["team"] == "platform"
+    assert hit.source == "design-doc"
+    store.close()

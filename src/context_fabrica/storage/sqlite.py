@@ -137,6 +137,63 @@ class SQLiteRecordStore:
         )
         self.conn.commit()
 
+    def fetch_record_with_chunks(self, record_id: str) -> tuple[KnowledgeRecord, list[tuple[str, list[float], int]]] | None:
+        record = self.fetch_record(record_id)
+        if record is None:
+            return None
+        rows = self.conn.execute(
+            "SELECT chunk_text, embedding, chunk_index FROM memory_chunks "
+            "WHERE record_id = ? ORDER BY chunk_index",
+            (record_id,),
+        ).fetchall()
+        chunks = [
+            (str(row[0]), json.loads(row[1]) if row[1] else [], int(row[2]))
+            for row in rows
+        ]
+        return (record, chunks)
+
+    def upsert_records(self, records: list[KnowledgeRecord]) -> None:
+        for record in records:
+            self.conn.execute(
+                """INSERT INTO memory_records (
+                    record_id, text_content, source, domain, confidence,
+                    memory_stage, memory_kind, tags, metadata,
+                    created_at, valid_from, valid_to, supersedes, reviewed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(record_id) DO UPDATE SET
+                    text_content=excluded.text_content,
+                    source=excluded.source,
+                    domain=excluded.domain,
+                    confidence=excluded.confidence,
+                    memory_stage=excluded.memory_stage,
+                    memory_kind=excluded.memory_kind,
+                    tags=excluded.tags,
+                    metadata=excluded.metadata,
+                    created_at=excluded.created_at,
+                    valid_from=excluded.valid_from,
+                    valid_to=excluded.valid_to,
+                    supersedes=excluded.supersedes,
+                    reviewed_at=excluded.reviewed_at
+                """,
+                (
+                    record.record_id,
+                    record.text,
+                    record.source,
+                    record.domain,
+                    record.confidence,
+                    record.stage,
+                    record.kind,
+                    json.dumps(record.tags),
+                    json.dumps(record.metadata),
+                    record.created_at.isoformat(),
+                    record.valid_from.isoformat(),
+                    record.valid_to.isoformat() if record.valid_to else None,
+                    record.supersedes,
+                    record.reviewed_at.isoformat() if record.reviewed_at else None,
+                ),
+            )
+        self.conn.commit()
+
     def fetch_record(self, record_id: str) -> KnowledgeRecord | None:
         row = self.conn.execute(
             "SELECT record_id, text_content, source, domain, confidence, "
@@ -178,6 +235,37 @@ class SQLiteRecordStore:
             (source_record_id, target_record_id, promoted_at.isoformat(), reason),
         )
         self.conn.commit()
+
+    def list_records(
+        self,
+        *,
+        domain: str | None = None,
+        stage: str | None = None,
+        limit: int = 100,
+    ) -> list[KnowledgeRecord]:
+        query = (
+            "SELECT record_id, text_content, source, domain, confidence, "
+            "memory_stage, memory_kind, tags, metadata, "
+            "created_at, valid_from, valid_to, supersedes, reviewed_at "
+            "FROM memory_records WHERE 1=1 "
+        )
+        params: list[Any] = []
+        if domain is not None:
+            query += "AND domain = ? "
+            params.append(domain)
+        if stage is not None:
+            query += "AND memory_stage = ? "
+            params.append(stage)
+        query += "ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(query, params).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    def delete_record(self, record_id: str) -> bool:
+        """Delete a record and cascade to chunks, relations, and promotions."""
+        cur = self.conn.execute("DELETE FROM memory_records WHERE record_id = ?", (record_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def enqueue_projection(self, record_id: str) -> None:
         # No-op for SQLite — graph projection is optional

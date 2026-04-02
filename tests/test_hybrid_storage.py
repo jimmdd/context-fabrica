@@ -50,6 +50,11 @@ def test_postgres_search_statement_filters_by_domain_and_validity() -> None:
     assert "r.valid_from <= %s" in statement
     assert "r.valid_to IS NULL OR r.valid_to >= %s" in statement
     assert "r.memory_stage <> 'staged'" in statement
+    # Must return complete records with tags/metadata
+    assert "r.tags" in statement
+    assert "r.metadata" in statement
+    assert "r.created_at" in statement
+    assert "r.reviewed_at" in statement
 
 
 def test_write_record_calls_store_write_methods(mocker) -> None:

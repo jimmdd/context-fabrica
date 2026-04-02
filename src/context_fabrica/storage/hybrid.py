@@ -131,6 +131,18 @@ class HybridMemoryStore:
             self.store.enqueue_projection(record.record_id)
         return record
 
+    def list_records(
+        self,
+        *,
+        domain: str | None = None,
+        stage: str | None = None,
+        limit: int = 100,
+    ) -> list[KnowledgeRecord]:
+        return self.store.list_records(domain=domain, stage=stage, limit=limit)
+
+    def delete_record(self, record_id: str) -> bool:
+        return self.store.delete_record(record_id)
+
     def semantic_search(
         self,
         query_embedding: list[float],
