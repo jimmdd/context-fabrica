@@ -389,15 +389,20 @@ pytest
 - [x] Optional graph projection (Kuzu not required)
 - [x] Caller-provided entity/relation extraction
 - [x] Configurable scoring modes (hybrid, embedding, bm25)
+- [x] Pluggable storage backends via `RecordStore` protocol
+- [x] SQLite adapter for zero-setup persistent storage
+- [x] Optional graph projection (Kuzu not required)
+- [x] Caller-provided entity/relation extraction
+- [x] Configurable scoring modes (hybrid, embedding, bm25, rrf)
 - [x] Configurable hybrid ranking weights via `ScoringWeights`
 - [x] Multi-tenant namespaces (per agent/team isolation)
 - [x] Memory lifecycle policies (TTL, decay, purge)
 - [x] Embedding dimension bootstrap migration (auto-resize on dimension change)
+- [x] Conflict handling (supersession chains, `supersede_record()`)
+- [x] Reciprocal Rank Fusion (RRF) scoring mode
+- [x] Feedback loop primitives (`record_outcome()`, `outcome_summary()`)
 - [ ] Pluggable graph adapters (Neo4j, Memgraph)
 - [ ] Additional vector stores (LanceDB, FAISS)
-- [ ] Conflict handling (contradiction sets, supersession chains)
-- [ ] Weighted-RRF and calibrated fusion modes
-- [ ] Continuous learning loops from agent outcomes
 
 ## References
 

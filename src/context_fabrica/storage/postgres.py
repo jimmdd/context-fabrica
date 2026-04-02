@@ -100,6 +100,15 @@ class PostgresPgvectorAdapter:
             f"ALTER TABLE {schema}.memory_chunks ALTER COLUMN embedding TYPE vector({dims}); "
             f"END IF; "
             f"END $$;",
+            f"CREATE TABLE IF NOT EXISTS {schema}.memory_outcomes ("
+            "outcome_id BIGSERIAL PRIMARY KEY, "
+            f"record_id TEXT NOT NULL REFERENCES {schema}.memory_records(record_id) ON DELETE CASCADE, "
+            "query_text TEXT NOT NULL, "
+            "outcome TEXT NOT NULL, "
+            "delta DOUBLE PRECISION NOT NULL DEFAULT 0.0, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ");",
+            f"CREATE INDEX IF NOT EXISTS idx_{schema}_outcomes_record ON {schema}.memory_outcomes(record_id);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_namespace ON {schema}.memory_records(namespace);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_domain ON {schema}.memory_records(domain);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_stage ON {schema}.memory_records(memory_stage);",
@@ -461,6 +470,59 @@ class PostgresPgvectorAdapter:
                 count = cur.rowcount
             conn.commit()
         return count
+
+    def record_outcome(
+        self,
+        record_id: str,
+        query_text: str,
+        outcome: str,
+        *,
+        delta: float = 0.0,
+    ) -> None:
+        """Record whether a retrieved record was useful."""
+        schema = self.settings.schema
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO {schema}.memory_outcomes (record_id, query_text, outcome, delta) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (record_id, query_text, outcome, delta),
+                )
+                if delta != 0.0:
+                    cur.execute(
+                        f"UPDATE {schema}.memory_records "
+                        "SET confidence = least(1.0, greatest(0.0, confidence + %s)) "
+                        "WHERE record_id = %s",
+                        (delta, record_id),
+                    )
+            conn.commit()
+
+    def outcome_summary(self, record_id: str) -> dict[str, int]:
+        """Count outcomes by type for a record."""
+        schema = self.settings.schema
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT outcome, count(*) FROM {schema}.memory_outcomes "
+                    "WHERE record_id = %s GROUP BY outcome",
+                    (record_id,),
+                )
+                rows = cur.fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
+    def supersession_chain(self, record_id: str) -> list[KnowledgeRecord]:
+        """Walk supersession chain backward from record to origin."""
+        chain: list[KnowledgeRecord] = []
+        seen: set[str] = set()
+        current_id: str | None = record_id
+        while current_id and current_id not in seen:
+            seen.add(current_id)
+            record = self.fetch_record(current_id)
+            if record is None:
+                break
+            chain.append(record)
+            current_id = record.supersedes
+        return chain
 
     def enqueue_projection(self, record_id: str) -> None:
         with self.connect() as conn:

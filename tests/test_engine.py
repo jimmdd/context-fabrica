@@ -204,3 +204,50 @@ def test_namespace_filtering_in_engine() -> None:
     alpha_results = engine.query("auth service", namespace="alpha", top_k=5)
     assert all(r.record.namespace == "alpha" for r in alpha_results)
     assert len(alpha_results) == 1
+
+
+def test_supersede_record_invalidates_old_and_links() -> None:
+    engine = DomainMemoryEngine()
+    engine.ingest("Build command is make release", record_id="v1", confidence=0.8)
+    new = engine.supersede_record("v1", "Build command is uv run task release", record_id="v2", reason="corrected")
+
+    assert new.supersedes == "v1"
+    assert engine._records["v1"].valid_to is not None
+    # Old should be filtered from queries
+    results = engine.query("build command", top_k=3)
+    assert all(r.record.record_id != "v1" for r in results)
+    assert any(r.record.record_id == "v2" for r in results)
+
+
+def test_supersession_chain() -> None:
+    engine = DomainMemoryEngine()
+    engine.ingest("timeout is 60s", record_id="v1", confidence=0.8)
+    engine.supersede_record("v1", "timeout is 45s", record_id="v2")
+    engine.supersede_record("v2", "timeout is 30s", record_id="v3")
+
+    chain = engine.supersession_chain("v3")
+    assert [r.record_id for r in chain] == ["v3", "v2", "v1"]
+
+
+def test_rrf_scoring_mode() -> None:
+    engine = DomainMemoryEngine(scoring="rrf")
+    engine.ingest(
+        "PaymentsService depends on LedgerAdapter.",
+        source="design-doc",
+        domain="fintech",
+        confidence=0.9,
+        record_id="r1",
+    )
+    engine.ingest(
+        "LedgerAdapter writes to event store.",
+        source="runbook",
+        domain="fintech",
+        confidence=0.7,
+        record_id="r2",
+    )
+
+    results = engine.query("PaymentsService LedgerAdapter", domain="fintech", top_k=2)
+    assert results
+    assert any("rrf" in r.rationale for r in results)
+    # RRF should still rank related records reasonably
+    assert results[0].score > 0

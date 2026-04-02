@@ -316,6 +316,43 @@ def test_sqlite_lifecycle_expire_and_purge(tmp_path) -> None:
     store.close()
 
 
+def test_sqlite_supersession_chain(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+
+    r1 = KnowledgeRecord(record_id="v1", text="timeout is 60s", source="doc", confidence=0.8)
+    r2 = KnowledgeRecord(record_id="v2", text="timeout is 45s", source="doc", confidence=0.8, supersedes="v1")
+    r3 = KnowledgeRecord(record_id="v3", text="timeout is 30s", source="doc", confidence=0.8, supersedes="v2")
+    store.upsert_record(r1)
+    store.upsert_record(r2)
+    store.upsert_record(r3)
+
+    chain = store.supersession_chain("v3")
+    assert [r.record_id for r in chain] == ["v3", "v2", "v1"]
+    store.close()
+
+
+def test_sqlite_record_outcome(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+
+    record = KnowledgeRecord(record_id="r1", text="auth info", source="doc", confidence=0.5)
+    store.upsert_record(record)
+
+    store.record_outcome("r1", "how does auth work?", "useful", delta=0.1)
+    store.record_outcome("r1", "what is the login flow?", "useful", delta=0.05)
+    store.record_outcome("r1", "billing info?", "not_useful", delta=-0.1)
+
+    summary = store.outcome_summary("r1")
+    assert summary["useful"] == 2
+    assert summary["not_useful"] == 1
+
+    updated = store.fetch_record("r1")
+    assert updated is not None
+    assert abs(updated.confidence - 0.55) < 0.01  # 0.5 + 0.1 + 0.05 - 0.1
+    store.close()
+
+
 def test_sqlite_lifecycle_decay_confidence(tmp_path) -> None:
     from datetime import timedelta
     store = SQLiteRecordStore(str(tmp_path / "test.db"))

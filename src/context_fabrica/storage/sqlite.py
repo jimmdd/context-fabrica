@@ -89,6 +89,16 @@ class SQLiteRecordStore:
                 UNIQUE (source_record_id, target_record_id)
             );
 
+            CREATE TABLE IF NOT EXISTS memory_outcomes (
+                outcome_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT NOT NULL REFERENCES memory_records(record_id) ON DELETE CASCADE,
+                query_text TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                delta REAL NOT NULL DEFAULT 0.0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_outcomes_record ON memory_outcomes(record_id);
             CREATE INDEX IF NOT EXISTS idx_records_namespace ON memory_records(namespace);
             CREATE INDEX IF NOT EXISTS idx_records_domain ON memory_records(domain);
             CREATE INDEX IF NOT EXISTS idx_records_stage ON memory_records(memory_stage);
@@ -271,6 +281,54 @@ class SQLiteRecordStore:
         )
         self.conn.commit()
         return cur.rowcount
+
+    def record_outcome(
+        self,
+        record_id: str,
+        query_text: str,
+        outcome: str,
+        *,
+        delta: float = 0.0,
+    ) -> None:
+        """Record whether a retrieved record was useful.
+
+        outcome: "useful", "not_useful", "partially_useful", "misleading"
+        delta: confidence adjustment to apply (e.g. +0.05 for useful, -0.1 for misleading)
+        """
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self.conn.execute(
+            "INSERT INTO memory_outcomes (record_id, query_text, outcome, delta, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (record_id, query_text, outcome, delta, now),
+        )
+        if delta != 0.0:
+            self.conn.execute(
+                "UPDATE memory_records SET confidence = min(1.0, max(0.0, confidence + ?)) WHERE record_id = ?",
+                (delta, record_id),
+            )
+        self.conn.commit()
+
+    def outcome_summary(self, record_id: str) -> dict[str, int]:
+        """Count outcomes by type for a record."""
+        rows = self.conn.execute(
+            "SELECT outcome, count(*) FROM memory_outcomes WHERE record_id = ? GROUP BY outcome",
+            (record_id,),
+        ).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
+    def supersession_chain(self, record_id: str) -> list[KnowledgeRecord]:
+        """Walk supersession chain backward from record to origin."""
+        chain: list[KnowledgeRecord] = []
+        seen: set[str] = set()
+        current_id: str | None = record_id
+        while current_id and current_id not in seen:
+            seen.add(current_id)
+            record = self.fetch_record(current_id)
+            if record is None:
+                break
+            chain.append(record)
+            current_id = record.supersedes
+        return chain
 
     def enqueue_projection(self, record_id: str) -> None:
         # No-op for SQLite — graph projection is optional

@@ -131,6 +131,26 @@ class HybridMemoryStore:
             self.store.enqueue_projection(record.record_id)
         return record
 
+    def supersede_record(
+        self,
+        old_record_id: str,
+        new_record: KnowledgeRecord,
+        *,
+        reason: str = "updated",
+    ) -> HybridWritePlan:
+        """Replace an old record with a new one, invalidating the old."""
+        old = self.store.fetch_record(old_record_id)
+        if old is None:
+            raise KeyError(old_record_id)
+        old.valid_to = datetime.now(tz=timezone.utc)
+        old.metadata["invalid_reason"] = reason
+        self.store.upsert_record(old)
+        new_record.supersedes = old_record_id
+        return self.write_text(new_record)
+
+    def supersession_chain(self, record_id: str) -> list[KnowledgeRecord]:
+        return self.store.supersession_chain(record_id)
+
     def list_records(
         self,
         *,

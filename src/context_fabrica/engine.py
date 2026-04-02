@@ -14,7 +14,7 @@ from .index import LexicalSemanticIndex
 from .models import KnowledgeRecord, QueryResult, Relation
 from .policy import decide_memory_tier, promote_record
 
-ScoringMode = Literal["hybrid", "embedding", "bm25"]
+ScoringMode = Literal["hybrid", "embedding", "bm25", "rrf"]
 
 
 class DomainMemoryEngine:
@@ -118,6 +118,10 @@ class DomainMemoryEngine:
             all_ids = {rid for rid in all_ids if self._records[rid].stage != "staged"}
 
         semantic = self._fuse_semantic(bm25_scores, embedding_scores, all_ids)
+
+        if self._scoring == "rrf":
+            return self._score_rrf(all_ids, semantic, graph, ref_now, top_k)
+
         sem_max = max(semantic.values(), default=1.0)
         graph_max = max(graph.values(), default=1.0)
 
@@ -182,6 +186,51 @@ class DomainMemoryEngine:
         record.valid_to = invalidated_at or datetime.now(tz=timezone.utc)
         record.metadata["invalid_reason"] = reason
 
+    def supersede_record(
+        self,
+        old_record_id: str,
+        new_text: str,
+        *,
+        source: str = "unknown",
+        domain: str | None = None,
+        confidence: float | None = None,
+        record_id: str | None = None,
+        reason: str = "updated",
+        entities: list[str] | None = None,
+        relations: list[Relation] | None = None,
+    ) -> KnowledgeRecord:
+        """Replace an old record with a new one, linking via supersedes."""
+        old = self._records[old_record_id]
+        self.invalidate_record(old_record_id, reason=reason)
+        new = self.ingest(
+            new_text,
+            source=source or old.source,
+            domain=domain or old.domain,
+            confidence=confidence if confidence is not None else old.confidence,
+            tags=list(old.tags),
+            metadata={**old.metadata, "supersession_reason": reason},
+            record_id=record_id,
+            entities=entities,
+            relations=relations,
+        )
+        new.supersedes = old_record_id
+        new.namespace = old.namespace
+        return new
+
+    def supersession_chain(self, record_id: str) -> list[KnowledgeRecord]:
+        """Walk the supersession chain backward from a record to its origin."""
+        chain: list[KnowledgeRecord] = []
+        current = self._records.get(record_id)
+        seen: set[str] = set()
+        while current and current.record_id not in seen:
+            chain.append(current)
+            seen.add(current.record_id)
+            if current.supersedes and current.supersedes in self._records:
+                current = self._records[current.supersedes]
+            else:
+                break
+        return chain
+
     def promote_record(self, record_id: str, *, reviewed_at: datetime | None = None) -> KnowledgeRecord:
         return promote_record(self._records[record_id], reviewed_at=reviewed_at)
 
@@ -207,6 +256,74 @@ class DomainMemoryEngine:
             if sim > 0.0:
                 scores[rid] = sim
         return scores
+
+    def _score_rrf(
+        self,
+        candidates: set[str],
+        semantic: dict[str, float],
+        graph: dict[str, float],
+        ref_now: datetime,
+        top_k: int,
+        k: int = 60,
+    ) -> list[QueryResult]:
+        """Reciprocal Rank Fusion across semantic, graph, recency, and confidence signals."""
+        # Build ranked lists for each signal
+        sem_ranked = sorted(candidates, key=lambda rid: semantic.get(rid, 0.0), reverse=True)
+        graph_ranked = sorted(candidates, key=lambda rid: graph.get(rid, 0.0), reverse=True)
+        recency_ranked = sorted(
+            candidates,
+            key=lambda rid: self._records[rid].created_at,
+            reverse=True,
+        )
+        confidence_ranked = sorted(
+            candidates,
+            key=lambda rid: self._records[rid].confidence,
+            reverse=True,
+        )
+
+        signal_ranks = [
+            (sem_ranked, self._weights["semantic"]),
+            (graph_ranked, self._weights["graph"]),
+            (recency_ranked, self._weights["recency"]),
+            (confidence_ranked, self._weights["confidence"]),
+        ]
+
+        rrf_scores: dict[str, float] = defaultdict(float)
+        for ranked_list, weight in signal_ranks:
+            for rank, rid in enumerate(ranked_list):
+                rrf_scores[rid] += weight * (1.0 / (k + rank + 1))
+
+        sem_max = max(semantic.values(), default=1.0)
+        graph_max = max(graph.values(), default=1.0)
+
+        results: list[QueryResult] = []
+        for rid in candidates:
+            record = self._records[rid]
+            sem_norm = semantic.get(rid, 0.0) / sem_max
+            graph_norm = graph.get(rid, 0.0) / graph_max
+            age_hours = max((ref_now - record.created_at).total_seconds() / 3600.0, 0.0)
+            recency_score = 1.0 / (1.0 + age_hours / 24.0)
+
+            rationale: list[str] = ["rrf"]
+            if sem_norm > 0.0:
+                rationale.append("semantic_match")
+            if graph_norm > 0.0:
+                rationale.append("graph_relation")
+
+            results.append(
+                QueryResult(
+                    record=record,
+                    score=rrf_scores[rid],
+                    semantic_score=sem_norm,
+                    graph_score=graph_norm,
+                    recency_score=recency_score,
+                    confidence_score=record.confidence,
+                    rationale=rationale,
+                )
+            )
+
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results[:top_k]
 
     def _fuse_semantic(
         self,
