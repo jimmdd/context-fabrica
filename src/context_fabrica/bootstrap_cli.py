@@ -28,8 +28,9 @@ def main() -> None:
     print(f"- project memory: {payload['memory_root']}")
     print(f"- postgres dsn: {args.dsn}")
     print("Next steps:")
-    print("1. PYTHONPATH=src python -m context_fabrica.demo_cli --dsn \"%s\" --project" % args.dsn)
-    print("2. PYTHONPATH=src python -m context_fabrica.projector_cli --dsn \"%s\" --once" % args.dsn)
+    print("1. context-fabrica-doctor --dsn \"%s\"" % args.dsn)
+    print("2. context-fabrica-demo --dsn \"%s\" --project" % args.dsn)
+    print("3. context-fabrica-projector --dsn \"%s\" --once" % args.dsn)
 
 
 if __name__ == "__main__":
