@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from src.context_fabrica.storage.sqlite import SQLiteRecordStore
 from src.context_fabrica.models import KnowledgeRecord
 from src.context_fabrica import HybridMemoryStore, HashEmbedder
@@ -263,4 +265,71 @@ def test_sqlite_semantic_search_returns_complete_records(tmp_path) -> None:
     assert hit.tags == ["auth", "critical"]
     assert hit.metadata["team"] == "platform"
     assert hit.source == "design-doc"
+    store.close()
+
+
+def test_sqlite_namespace_isolation(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+    embedder = HashEmbedder(dimensions=64)
+
+    r1 = KnowledgeRecord(record_id="r1", text="team alpha auth", source="doc", domain="platform", namespace="alpha", confidence=0.8)
+    r2 = KnowledgeRecord(record_id="r2", text="team beta auth", source="doc", domain="platform", namespace="beta", confidence=0.8)
+    store.upsert_record(r1)
+    store.upsert_record(r2)
+    store.replace_chunks("r1", [("team alpha auth", embedder.embed(r1.text), 0)])
+    store.replace_chunks("r2", [("team beta auth", embedder.embed(r2.text), 0)])
+
+    alpha = store.list_records(namespace="alpha")
+    assert len(alpha) == 1
+    assert alpha[0].namespace == "alpha"
+
+    results = store.semantic_search(embedder.embed("auth"), namespace="beta", top_k=5)
+    assert all(r.record.namespace == "beta" for r in results)
+    store.close()
+
+
+def test_sqlite_lifecycle_expire_and_purge(tmp_path) -> None:
+    from datetime import timedelta
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+
+    old_time = datetime.now(tz=timezone.utc) - timedelta(days=60)
+    r1 = KnowledgeRecord(record_id="old", text="old record", source="doc", confidence=0.8)
+    r1.created_at = old_time
+    r2 = KnowledgeRecord(record_id="new", text="new record", source="doc", confidence=0.8)
+    store.upsert_record(r1)
+    store.upsert_record(r2)
+
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
+    expired = store.expire_records(before=cutoff)
+    assert expired == 1
+
+    old = store.fetch_record("old")
+    assert old is not None
+    assert old.valid_to is not None
+
+    purged = store.purge_expired()
+    assert purged == 1
+    assert store.fetch_record("old") is None
+    assert store.fetch_record("new") is not None
+    store.close()
+
+
+def test_sqlite_lifecycle_decay_confidence(tmp_path) -> None:
+    from datetime import timedelta
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+
+    old_time = datetime.now(tz=timezone.utc) - timedelta(days=60)
+    r1 = KnowledgeRecord(record_id="old", text="old record", source="doc", confidence=0.8)
+    r1.created_at = old_time
+    store.upsert_record(r1)
+
+    decayed = store.decay_confidence(older_than_days=30, decay_factor=0.5)
+    assert decayed == 1
+
+    record = store.fetch_record("old")
+    assert record is not None
+    assert abs(record.confidence - 0.4) < 0.01
     store.close()

@@ -42,6 +42,7 @@ class RecordStore(Protocol):
         query_embedding: list[float],
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         top_k: int = 5,
     ) -> list[QueryResult]: ...
 
@@ -51,9 +52,16 @@ class RecordStore(Protocol):
         self,
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         stage: str | None = None,
         limit: int = 100,
     ) -> list[KnowledgeRecord]: ...
+
+    def expire_records(self, *, before: datetime) -> int: ...
+
+    def decay_confidence(self, *, older_than_days: int, decay_factor: float = 0.95) -> int: ...
+
+    def purge_expired(self) -> int: ...
 
     def enqueue_projection(self, record_id: str) -> None: ...
 

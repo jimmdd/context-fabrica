@@ -6,6 +6,7 @@ from math import sqrt
 from typing import Iterable, Literal
 from uuid import uuid4
 
+from .config import ScoringWeights
 from .embedding import Embedder, HashEmbedder
 from .entity import extract_entities, extract_relations
 from .graph import KnowledgeGraph
@@ -22,6 +23,7 @@ class DomainMemoryEngine:
         *,
         embedder: Embedder | None = None,
         scoring: ScoringMode = "hybrid",
+        weights: ScoringWeights | None = None,
     ) -> None:
         self._records: dict[str, KnowledgeRecord] = {}
         self._index = LexicalSemanticIndex()
@@ -29,11 +31,12 @@ class DomainMemoryEngine:
         self._embedder = embedder or HashEmbedder()
         self._embeddings: dict[str, list[float]] = {}
         self._scoring = scoring
+        self._scoring_weights = weights or ScoringWeights()
         self._weights = {
-            "semantic": 0.50,
-            "graph": 0.30,
-            "recency": 0.12,
-            "confidence": 0.08,
+            "semantic": self._scoring_weights.semantic,
+            "graph": self._scoring_weights.graph,
+            "recency": self._scoring_weights.recency,
+            "confidence": self._scoring_weights.confidence,
         }
 
     @property
@@ -92,6 +95,7 @@ class DomainMemoryEngine:
         top_k: int = 5,
         hops: int = 2,
         domain: str | None = None,
+        namespace: str | None = None,
         now: datetime | None = None,
         as_of: datetime | None = None,
         include_staged: bool = False,
@@ -107,6 +111,8 @@ class DomainMemoryEngine:
         all_ids = set(bm25_scores) | set(embedding_scores) | set(graph)
         if domain:
             all_ids = {rid for rid in all_ids if self._records[rid].domain == domain}
+        if namespace:
+            all_ids = {rid for rid in all_ids if self._records[rid].namespace == namespace}
         all_ids = {rid for rid in all_ids if self._is_valid(self._records[rid], point_in_time)}
         if not include_staged:
             all_ids = {rid for rid in all_ids if self._records[rid].stage != "staged"}
@@ -213,13 +219,14 @@ class DomainMemoryEngine:
             return {rid: bm25.get(rid, 0.0) for rid in candidates if bm25.get(rid, 0.0) > 0}
         if self._scoring == "embedding":
             return {rid: embedding.get(rid, 0.0) for rid in candidates if embedding.get(rid, 0.0) > 0}
-        # hybrid: embedding as primary (70%), BM25 as lexical boost (30%)
+        # hybrid: configurable embedding/BM25 fusion
+        emb_weight = self._scoring_weights.semantic_embedding
+        bm25_weight = self._scoring_weights.semantic_bm25
         fused: dict[str, float] = {}
         for rid in candidates:
             emb = embedding.get(rid, 0.0)
             bm = bm25.get(rid, 0.0)
-            # Normalize BM25 relative to its own max for fusion
-            score = 0.7 * emb + 0.3 * bm
+            score = emb_weight * emb + bm25_weight * bm
             if score > 0.0:
                 fused[rid] = score
         return fused

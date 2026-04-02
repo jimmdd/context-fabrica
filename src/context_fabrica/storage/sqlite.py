@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import sqrt
 from typing import Any, cast
 
@@ -50,6 +50,7 @@ class SQLiteRecordStore:
                 text_content TEXT NOT NULL,
                 source TEXT NOT NULL,
                 domain TEXT NOT NULL,
+                namespace TEXT NOT NULL DEFAULT 'default',
                 confidence REAL NOT NULL,
                 memory_stage TEXT NOT NULL DEFAULT 'canonical',
                 memory_kind TEXT NOT NULL DEFAULT 'fact',
@@ -88,6 +89,7 @@ class SQLiteRecordStore:
                 UNIQUE (source_record_id, target_record_id)
             );
 
+            CREATE INDEX IF NOT EXISTS idx_records_namespace ON memory_records(namespace);
             CREATE INDEX IF NOT EXISTS idx_records_domain ON memory_records(domain);
             CREATE INDEX IF NOT EXISTS idx_records_stage ON memory_records(memory_stage);
             CREATE INDEX IF NOT EXISTS idx_chunks_record ON memory_chunks(record_id);
@@ -96,45 +98,49 @@ class SQLiteRecordStore:
         """)
         self.conn.commit()
 
-    def upsert_record(self, record: KnowledgeRecord) -> None:
-        self.conn.execute(
-            """INSERT INTO memory_records (
-                record_id, text_content, source, domain, confidence,
-                memory_stage, memory_kind, tags, metadata,
-                created_at, valid_from, valid_to, supersedes, reviewed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(record_id) DO UPDATE SET
-                text_content=excluded.text_content,
-                source=excluded.source,
-                domain=excluded.domain,
-                confidence=excluded.confidence,
-                memory_stage=excluded.memory_stage,
-                memory_kind=excluded.memory_kind,
-                tags=excluded.tags,
-                metadata=excluded.metadata,
-                created_at=excluded.created_at,
-                valid_from=excluded.valid_from,
-                valid_to=excluded.valid_to,
-                supersedes=excluded.supersedes,
-                reviewed_at=excluded.reviewed_at
-            """,
-            (
-                record.record_id,
-                record.text,
-                record.source,
-                record.domain,
-                record.confidence,
-                record.stage,
-                record.kind,
-                json.dumps(record.tags),
-                json.dumps(record.metadata),
-                record.created_at.isoformat(),
-                record.valid_from.isoformat(),
-                record.valid_to.isoformat() if record.valid_to else None,
-                record.supersedes,
-                record.reviewed_at.isoformat() if record.reviewed_at else None,
-            ),
+    def _upsert_record_params(self, record: KnowledgeRecord) -> tuple[Any, ...]:
+        return (
+            record.record_id,
+            record.text,
+            record.source,
+            record.domain,
+            record.namespace,
+            record.confidence,
+            record.stage,
+            record.kind,
+            json.dumps(record.tags),
+            json.dumps(record.metadata),
+            record.created_at.isoformat(),
+            record.valid_from.isoformat(),
+            record.valid_to.isoformat() if record.valid_to else None,
+            record.supersedes,
+            record.reviewed_at.isoformat() if record.reviewed_at else None,
         )
+
+    _UPSERT_SQL = """INSERT INTO memory_records (
+            record_id, text_content, source, domain, namespace, confidence,
+            memory_stage, memory_kind, tags, metadata,
+            created_at, valid_from, valid_to, supersedes, reviewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(record_id) DO UPDATE SET
+            text_content=excluded.text_content,
+            source=excluded.source,
+            domain=excluded.domain,
+            namespace=excluded.namespace,
+            confidence=excluded.confidence,
+            memory_stage=excluded.memory_stage,
+            memory_kind=excluded.memory_kind,
+            tags=excluded.tags,
+            metadata=excluded.metadata,
+            created_at=excluded.created_at,
+            valid_from=excluded.valid_from,
+            valid_to=excluded.valid_to,
+            supersedes=excluded.supersedes,
+            reviewed_at=excluded.reviewed_at
+        """
+
+    def upsert_record(self, record: KnowledgeRecord) -> None:
+        self.conn.execute(self._UPSERT_SQL, self._upsert_record_params(record))
         self.conn.commit()
 
     def fetch_record_with_chunks(self, record_id: str) -> tuple[KnowledgeRecord, list[tuple[str, list[float], int]]] | None:
@@ -154,49 +160,12 @@ class SQLiteRecordStore:
 
     def upsert_records(self, records: list[KnowledgeRecord]) -> None:
         for record in records:
-            self.conn.execute(
-                """INSERT INTO memory_records (
-                    record_id, text_content, source, domain, confidence,
-                    memory_stage, memory_kind, tags, metadata,
-                    created_at, valid_from, valid_to, supersedes, reviewed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(record_id) DO UPDATE SET
-                    text_content=excluded.text_content,
-                    source=excluded.source,
-                    domain=excluded.domain,
-                    confidence=excluded.confidence,
-                    memory_stage=excluded.memory_stage,
-                    memory_kind=excluded.memory_kind,
-                    tags=excluded.tags,
-                    metadata=excluded.metadata,
-                    created_at=excluded.created_at,
-                    valid_from=excluded.valid_from,
-                    valid_to=excluded.valid_to,
-                    supersedes=excluded.supersedes,
-                    reviewed_at=excluded.reviewed_at
-                """,
-                (
-                    record.record_id,
-                    record.text,
-                    record.source,
-                    record.domain,
-                    record.confidence,
-                    record.stage,
-                    record.kind,
-                    json.dumps(record.tags),
-                    json.dumps(record.metadata),
-                    record.created_at.isoformat(),
-                    record.valid_from.isoformat(),
-                    record.valid_to.isoformat() if record.valid_to else None,
-                    record.supersedes,
-                    record.reviewed_at.isoformat() if record.reviewed_at else None,
-                ),
-            )
+            self.conn.execute(self._UPSERT_SQL, self._upsert_record_params(record))
         self.conn.commit()
 
     def fetch_record(self, record_id: str) -> KnowledgeRecord | None:
         row = self.conn.execute(
-            "SELECT record_id, text_content, source, domain, confidence, "
+            "SELECT record_id, text_content, source, domain, namespace, confidence, "
             "memory_stage, memory_kind, tags, metadata, "
             "created_at, valid_from, valid_to, supersedes, reviewed_at "
             "FROM memory_records WHERE record_id = ?",
@@ -240,11 +209,12 @@ class SQLiteRecordStore:
         self,
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         stage: str | None = None,
         limit: int = 100,
     ) -> list[KnowledgeRecord]:
         query = (
-            "SELECT record_id, text_content, source, domain, confidence, "
+            "SELECT record_id, text_content, source, domain, namespace, confidence, "
             "memory_stage, memory_kind, tags, metadata, "
             "created_at, valid_from, valid_to, supersedes, reviewed_at "
             "FROM memory_records WHERE 1=1 "
@@ -253,6 +223,9 @@ class SQLiteRecordStore:
         if domain is not None:
             query += "AND domain = ? "
             params.append(domain)
+        if namespace is not None:
+            query += "AND namespace = ? "
+            params.append(namespace)
         if stage is not None:
             query += "AND memory_stage = ? "
             params.append(stage)
@@ -267,6 +240,38 @@ class SQLiteRecordStore:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def expire_records(self, *, before: datetime) -> int:
+        """Soft-expire records created before the given timestamp."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+        cur = self.conn.execute(
+            "UPDATE memory_records SET valid_to = ? "
+            "WHERE valid_to IS NULL AND created_at < ?",
+            (now, before.isoformat()),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def decay_confidence(self, *, older_than_days: int, decay_factor: float = 0.95) -> int:
+        """Multiply confidence by decay_factor for records older than N days."""
+        cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=older_than_days)).isoformat()
+        cur = self.conn.execute(
+            "UPDATE memory_records SET confidence = confidence * ? "
+            "WHERE created_at < ? AND confidence > 0.01 AND valid_to IS NULL",
+            (decay_factor, cutoff),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def purge_expired(self) -> int:
+        """Hard-delete records whose valid_to is in the past."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+        cur = self.conn.execute(
+            "DELETE FROM memory_records WHERE valid_to IS NOT NULL AND valid_to < ?",
+            (now,),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
     def enqueue_projection(self, record_id: str) -> None:
         # No-op for SQLite — graph projection is optional
         pass
@@ -276,12 +281,13 @@ class SQLiteRecordStore:
         query_embedding: list[float],
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         top_k: int = 5,
     ) -> list[QueryResult]:
         now = datetime.now(tz=timezone.utc).isoformat()
 
         query = (
-            "SELECT r.record_id, r.text_content, r.source, r.domain, r.confidence, "
+            "SELECT r.record_id, r.text_content, r.source, r.domain, r.namespace, r.confidence, "
             "r.memory_stage, r.memory_kind, r.tags, r.metadata, "
             "r.created_at, r.valid_from, r.valid_to, r.supersedes, r.reviewed_at, "
             "c.embedding "
@@ -296,12 +302,15 @@ class SQLiteRecordStore:
         if domain is not None:
             query += "AND r.domain = ? "
             params.append(domain)
+        if namespace is not None:
+            query += "AND r.namespace = ? "
+            params.append(namespace)
 
         rows = self.conn.execute(query, params).fetchall()
 
         scored: list[tuple[float, Any]] = []
         for row in rows:
-            embedding_json = row[14]
+            embedding_json = row[15]
             if embedding_json is None:
                 continue
             stored_embedding = json.loads(embedding_json)
@@ -313,7 +322,7 @@ class SQLiteRecordStore:
 
         results: list[QueryResult] = []
         for score, row in scored[:top_k]:
-            record = self._row_to_record(row[:14])
+            record = self._row_to_record(row[:15])
             results.append(
                 QueryResult(
                     record=record,
@@ -341,14 +350,15 @@ class SQLiteRecordStore:
             text=str(row[1]),
             source=str(row[2]),
             domain=str(row[3]),
-            confidence=float(row[4]),
-            stage=cast(Any, str(row[5])),
-            kind=cast(Any, str(row[6])),
-            tags=json.loads(row[7]) if isinstance(row[7], str) else list(row[7]),
-            metadata=json.loads(row[8]) if isinstance(row[8], str) else dict(row[8]),
-            created_at=datetime.fromisoformat(str(row[9])),
-            valid_from=datetime.fromisoformat(str(row[10])),
-            valid_to=datetime.fromisoformat(str(row[11])) if row[11] else None,
-            supersedes=str(row[12]) if row[12] else None,
-            reviewed_at=datetime.fromisoformat(str(row[13])) if row[13] else None,
+            namespace=str(row[4]),
+            confidence=float(row[5]),
+            stage=cast(Any, str(row[6])),
+            kind=cast(Any, str(row[7])),
+            tags=json.loads(row[8]) if isinstance(row[8], str) else list(row[8]),
+            metadata=json.loads(row[9]) if isinstance(row[9], str) else dict(row[9]),
+            created_at=datetime.fromisoformat(str(row[10])),
+            valid_from=datetime.fromisoformat(str(row[11])),
+            valid_to=datetime.fromisoformat(str(row[12])) if row[12] else None,
+            supersedes=str(row[13]) if row[13] else None,
+            reviewed_at=datetime.fromisoformat(str(row[14])) if row[14] else None,
         )

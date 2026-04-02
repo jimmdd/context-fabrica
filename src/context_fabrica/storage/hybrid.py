@@ -135,10 +135,11 @@ class HybridMemoryStore:
         self,
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         stage: str | None = None,
         limit: int = 100,
     ) -> list[KnowledgeRecord]:
-        return self.store.list_records(domain=domain, stage=stage, limit=limit)
+        return self.store.list_records(domain=domain, namespace=namespace, stage=stage, limit=limit)
 
     def delete_record(self, record_id: str) -> bool:
         return self.store.delete_record(record_id)
@@ -148,6 +149,7 @@ class HybridMemoryStore:
         query_embedding: list[float],
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         top_k: int = 5,
     ) -> list[Any]:
-        return self.store.semantic_search(query_embedding, domain=domain, top_k=top_k)
+        return self.store.semantic_search(query_embedding, domain=domain, namespace=namespace, top_k=top_k)

@@ -1,6 +1,6 @@
 from .adapters import GraphStore, RecordStore
 from .embedding import FastEmbedEmbedder, HashEmbedder, SentenceTransformerEmbedder, build_default_embedder, chunk_text
-from .config import HybridStoreSettings, KuzuSettings, PostgresSettings
+from .config import HybridStoreSettings, KuzuSettings, PostgresSettings, ScoringWeights
 from .engine import DomainMemoryEngine
 from .models import KnowledgeRecord, QueryResult
 from .policy import PromotionDecision, decide_memory_tier, promote_record
@@ -20,6 +20,7 @@ __all__ = [
     "PromotionDecision",
     "QueryResult",
     "RecordStore",
+    "ScoringWeights",
     "SQLiteRecordStore",
     "SentenceTransformerEmbedder",
     "build_default_embedder",

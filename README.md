@@ -389,11 +389,12 @@ pytest
 - [x] Optional graph projection (Kuzu not required)
 - [x] Caller-provided entity/relation extraction
 - [x] Configurable scoring modes (hybrid, embedding, bm25)
-- [ ] Configurable hybrid ranking weights via settings
-- [ ] Multi-tenant namespaces (per agent/team isolation)
+- [x] Configurable hybrid ranking weights via `ScoringWeights`
+- [x] Multi-tenant namespaces (per agent/team isolation)
+- [x] Memory lifecycle policies (TTL, decay, purge)
+- [x] Embedding dimension bootstrap migration (auto-resize on dimension change)
 - [ ] Pluggable graph adapters (Neo4j, Memgraph)
 - [ ] Additional vector stores (LanceDB, FAISS)
-- [ ] Memory lifecycle policies (TTL, decay, archival)
 - [ ] Conflict handling (contradiction sets, supersession chains)
 - [ ] Weighted-RRF and calibrated fusion modes
 - [ ] Continuous learning loops from agent outcomes

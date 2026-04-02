@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from src.context_fabrica.config import ScoringWeights
 from src.context_fabrica.engine import DomainMemoryEngine
 from src.context_fabrica.models import Relation
 
@@ -180,3 +181,26 @@ def test_bm25_only_mode_ignores_embeddings() -> None:
     # Embedding scores should not be computed in bm25 mode
     assert engine._embeddings  # embeddings are still stored
     assert results[0].record.record_id == "r1"
+
+
+def test_configurable_scoring_weights() -> None:
+    weights = ScoringWeights(semantic=0.80, graph=0.10, recency=0.05, confidence=0.05)
+    engine = DomainMemoryEngine(weights=weights)
+    assert engine._weights["semantic"] == 0.80
+    assert engine._weights["graph"] == 0.10
+
+    engine.ingest("AuthService depends on TokenSigner", record_id="r1", confidence=0.8)
+    results = engine.query("AuthService TokenSigner", top_k=1)
+    assert results
+
+
+def test_namespace_filtering_in_engine() -> None:
+    engine = DomainMemoryEngine()
+    engine.ingest("alpha team auth service", record_id="r1", confidence=0.8)
+    engine._records["r1"].namespace = "alpha"
+    engine.ingest("beta team auth service", record_id="r2", confidence=0.8)
+    engine._records["r2"].namespace = "beta"
+
+    alpha_results = engine.query("auth service", namespace="alpha", top_k=5)
+    assert all(r.record.namespace == "alpha" for r in alpha_results)
+    assert len(alpha_results) == 1

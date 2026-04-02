@@ -38,6 +38,7 @@ class PostgresPgvectorAdapter:
             "text_content TEXT NOT NULL, "
             "source TEXT NOT NULL, "
             "domain TEXT NOT NULL, "
+            "namespace TEXT NOT NULL DEFAULT 'default', "
             "confidence DOUBLE PRECISION NOT NULL, "
             "memory_stage TEXT NOT NULL DEFAULT 'canonical', "
             "memory_kind TEXT NOT NULL DEFAULT 'fact', "
@@ -49,6 +50,7 @@ class PostgresPgvectorAdapter:
             "supersedes TEXT NULL, "
             "reviewed_at TIMESTAMPTZ NULL"
             ");",
+            f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'default';",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS memory_stage TEXT NOT NULL DEFAULT 'canonical';",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS memory_kind TEXT NOT NULL DEFAULT 'fact';",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL;",
@@ -86,6 +88,19 @@ class PostgresPgvectorAdapter:
             "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
             "UNIQUE (record_id, job_type)"
             ");".replace("{schema}", schema),
+            # Ensure embedding column matches configured dimensions (handles dimension changes)
+            f"DO $$ BEGIN "
+            f"IF EXISTS (SELECT 1 FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = 'memory_chunks' AND column_name = 'embedding') "
+            f"AND NOT EXISTS (SELECT 1 FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = 'memory_chunks' AND column_name = 'embedding' "
+            f"AND udt_name = 'vector' AND character_maximum_length IS NOT DISTINCT FROM {dims}) "
+            f"THEN "
+            f"DROP INDEX IF EXISTS {schema}.idx_{schema}_chunks_embedding; "
+            f"ALTER TABLE {schema}.memory_chunks ALTER COLUMN embedding TYPE vector({dims}); "
+            f"END IF; "
+            f"END $$;",
+            f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_namespace ON {schema}.memory_records(namespace);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_domain ON {schema}.memory_records(domain);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_stage ON {schema}.memory_records(memory_stage);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_validity ON {schema}.memory_records(valid_from, valid_to);",
@@ -106,12 +121,13 @@ class PostgresPgvectorAdapter:
         schema = self.settings.schema
         return (
             f"INSERT INTO {schema}.memory_records ("
-            "record_id, text_content, source, domain, confidence, memory_stage, memory_kind, tags, metadata, created_at, valid_from, valid_to, supersedes, reviewed_at"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s) "
+            "record_id, text_content, source, domain, namespace, confidence, memory_stage, memory_kind, tags, metadata, created_at, valid_from, valid_to, supersedes, reviewed_at"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s) "
             "ON CONFLICT (record_id) DO UPDATE SET "
             "text_content = EXCLUDED.text_content, "
             "source = EXCLUDED.source, "
             "domain = EXCLUDED.domain, "
+            "namespace = EXCLUDED.namespace, "
             "confidence = EXCLUDED.confidence, "
             "memory_stage = EXCLUDED.memory_stage, "
             "memory_kind = EXCLUDED.memory_kind, "
@@ -149,7 +165,7 @@ class PostgresPgvectorAdapter:
     def fetch_record_statement(self) -> str:
         schema = self.settings.schema
         return (
-            f"SELECT record_id, text_content, source, domain, confidence, memory_stage, memory_kind, tags, metadata, "
+            f"SELECT record_id, text_content, source, domain, namespace, confidence, memory_stage, memory_kind, tags, metadata, "
             "created_at, valid_from, valid_to, supersedes, reviewed_at "
             f"FROM {schema}.memory_records WHERE record_id = %s;"
         )
@@ -238,13 +254,14 @@ class PostgresPgvectorAdapter:
     def search_statement(self) -> str:
         schema = self.settings.schema
         return (
-            f"SELECT r.record_id, r.text_content, r.source, r.domain, r.confidence, "
+            f"SELECT r.record_id, r.text_content, r.source, r.domain, r.namespace, r.confidence, "
             "r.memory_stage, r.memory_kind, r.tags, r.metadata, "
             "r.created_at, r.valid_from, r.valid_to, r.supersedes, r.reviewed_at, "
             "1 - (c.embedding <=> %s) AS semantic_score "
             f"FROM {schema}.memory_chunks c "
             f"JOIN {schema}.memory_records r ON r.record_id = c.record_id "
             "WHERE (%s::text IS NULL OR r.domain = %s) "
+            "AND (%s::text IS NULL OR r.namespace = %s) "
             "AND r.valid_from <= %s "
             "AND (r.valid_to IS NULL OR r.valid_to >= %s) "
             "AND r.memory_stage <> 'staged' "
@@ -257,6 +274,7 @@ class PostgresPgvectorAdapter:
             record.text,
             record.source,
             record.domain,
+            record.namespace,
             record.confidence,
             record.stage,
             record.kind,
@@ -353,12 +371,13 @@ class PostgresPgvectorAdapter:
         self,
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         stage: str | None = None,
         limit: int = 100,
     ) -> list[KnowledgeRecord]:
         schema = self.settings.schema
         query = (
-            f"SELECT record_id, text_content, source, domain, confidence, "
+            f"SELECT record_id, text_content, source, domain, namespace, confidence, "
             "memory_stage, memory_kind, tags, metadata, "
             "created_at, valid_from, valid_to, supersedes, reviewed_at "
             f"FROM {schema}.memory_records WHERE 1=1 "
@@ -367,6 +386,9 @@ class PostgresPgvectorAdapter:
         if domain is not None:
             query += "AND domain = %s "
             params.append(domain)
+        if namespace is not None:
+            query += "AND namespace = %s "
+            params.append(namespace)
         if stage is not None:
             query += "AND memory_stage = %s "
             params.append(stage)
@@ -385,17 +407,60 @@ class PostgresPgvectorAdapter:
             text=str(row[1]),
             source=str(row[2]),
             domain=str(row[3]),
-            confidence=float(row[4]),
-            stage=cast(Any, str(row[5])),
-            kind=cast(Any, str(row[6])),
-            tags=list(cast(list[str], row[7])),
-            metadata=dict(cast(dict[str, Any], row[8])),
-            created_at=row[9],
-            valid_from=row[10],
-            valid_to=row[11],
-            supersedes=row[12],
-            reviewed_at=row[13],
+            namespace=str(row[4]),
+            confidence=float(row[5]),
+            stage=cast(Any, str(row[6])),
+            kind=cast(Any, str(row[7])),
+            tags=list(cast(list[str], row[8])),
+            metadata=dict(cast(dict[str, Any], row[9])),
+            created_at=row[10],
+            valid_from=row[11],
+            valid_to=row[12],
+            supersedes=row[13],
+            reviewed_at=row[14],
         )
+
+    def expire_records(self, *, before: datetime) -> int:
+        """Soft-expire records created before the given timestamp."""
+        schema = self.settings.schema
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {schema}.memory_records SET valid_to = now() "
+                    "WHERE valid_to IS NULL AND created_at < %s",
+                    (before,),
+                )
+                count = cur.rowcount
+            conn.commit()
+        return count
+
+    def decay_confidence(self, *, older_than_days: int, decay_factor: float = 0.95) -> int:
+        """Multiply confidence by decay_factor for records older than N days."""
+        schema = self.settings.schema
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {schema}.memory_records "
+                    "SET confidence = confidence * %s "
+                    "WHERE created_at < now() - interval '1 day' * %s "
+                    "AND confidence > 0.01 AND valid_to IS NULL",
+                    (decay_factor, older_than_days),
+                )
+                count = cur.rowcount
+            conn.commit()
+        return count
+
+    def purge_expired(self) -> int:
+        """Hard-delete records whose valid_to is in the past."""
+        schema = self.settings.schema
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {schema}.memory_records WHERE valid_to IS NOT NULL AND valid_to < now()"
+                )
+                count = cur.rowcount
+            conn.commit()
+        return count
 
     def enqueue_projection(self, record_id: str) -> None:
         with self.connect() as conn:
@@ -496,6 +561,7 @@ class PostgresPgvectorAdapter:
         query_embedding: list[float],
         *,
         domain: str | None = None,
+        namespace: str | None = None,
         top_k: int = 5,
     ) -> list[QueryResult]:
         conn = self.connect()
@@ -504,7 +570,7 @@ class PostgresPgvectorAdapter:
             with conn.cursor() as cur:
                 now = self._now_utc()
                 vector_query = self._vector_value(query_embedding)
-                cur.execute(self.search_statement(), (vector_query, domain, domain, now, now, vector_query, top_k))
+                cur.execute(self.search_statement(), (vector_query, domain, domain, namespace, namespace, now, now, vector_query, top_k))
                 rows = cur.fetchall()
         return [self._row_to_query_result(row) for row in rows]
 
@@ -535,23 +601,8 @@ class PostgresPgvectorAdapter:
         return vector_cls(values)
 
     def _row_to_query_result(self, row: tuple[Any, ...]) -> QueryResult:
-        record = KnowledgeRecord(
-            record_id=str(row[0]),
-            text=str(row[1]),
-            source=str(row[2]),
-            domain=str(row[3]),
-            confidence=float(row[4]),
-            stage=cast(Any, str(row[5])),
-            kind=cast(Any, str(row[6])),
-            tags=list(cast(list[str], row[7])),
-            metadata=dict(cast(dict[str, Any], row[8])),
-            created_at=row[9],
-            valid_from=row[10],
-            valid_to=row[11],
-            supersedes=row[12],
-            reviewed_at=row[13],
-        )
-        semantic_score = float(row[14])
+        record = self._row_to_record(row[:15])
+        semantic_score = float(row[15])
         return QueryResult(
             record=record,
             score=semantic_score,

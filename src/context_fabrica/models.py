@@ -14,6 +14,7 @@ class KnowledgeRecord:
     text: str
     source: str = "unknown"
     domain: str = "global"
+    namespace: str = "default"
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     confidence: float = 0.6
     tags: list[str] = field(default_factory=list)
