@@ -184,10 +184,10 @@ Default hybrid score:
 - `Kuzu`: projected graph of entities and relation edges for multi-hop traversal
 - `HybridMemoryStore`: composes both stores and emits bootstrap/write plans
 
-Install extras for the v2 stack:
+Install runtime dependencies for the v2 stack:
 
 ```bash
-pip install -e .[v2]
+python -m pip install -r requirements-v2.txt
 ```
 
 Bootstrap and verify the local Postgres write-authority schema:
@@ -286,6 +286,14 @@ python scripts/run_projector.py --once
 PYTHONPATH=src python -m context_fabrica.projector_cli --once
 PYTHONPATH=src python -m context_fabrica.projector_cli --status
 PYTHONPATH=src python -m context_fabrica.projector_cli --retry-failed
+```
+
+Installed console-script examples (if your user script directory is on `PATH`):
+
+```bash
+context-fabrica-bootstrap --dsn "postgresql:///context_fabrica"
+context-fabrica-demo --dsn "postgresql:///context_fabrica" --project
+context-fabrica-projector --status
 ```
 
 Bootstrap command:
