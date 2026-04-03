@@ -3,6 +3,12 @@
 ## 1. Install the package
 
 ```bash
+python -m pip install "context-fabrica[postgres,kuzu,fastembed]"
+```
+
+If you are running from a local clone instead of PyPI:
+
+```bash
 python -m pip install .
 python -m pip install -r requirements-v2.txt
 ```

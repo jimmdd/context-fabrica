@@ -10,7 +10,7 @@ Semantic retrieval + knowledge graph traversal + curated memory tiers — in one
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-[Getting Started](docs/getting-started.md) | [Architecture](docs/architecture.md) | [Examples](examples/) | [Contributing](CONTRIBUTING.md)
+[Getting Started](docs/getting-started.md) | [Architecture](docs/architecture.md) | [Examples](examples/) | [Contributing](CONTRIBUTING.md) | [Releasing](RELEASING.md)
 
 </div>
 
@@ -90,7 +90,7 @@ Pick the backend that matches your scale. No code changes needed — the `Hybrid
 ### SQLite — zero setup, no server
 
 ```bash
-pip install .
+pip install context-fabrica
 ```
 
 ```python
@@ -109,7 +109,14 @@ SQLite stores records, chunks, embeddings, relations, and promotions in a single
 ### Postgres + pgvector — production scale
 
 ```bash
-pip install -r requirements-v2.txt
+pip install "context-fabrica[postgres,kuzu,fastembed]"
+```
+
+If you are working from a local clone instead of PyPI:
+
+```bash
+python -m pip install .
+python -m pip install -r requirements-v2.txt
 ```
 
 ```python
@@ -179,6 +186,20 @@ store = HybridMemoryStore(store=MyLanceDBStore(), graph=MyGraphStore())  # graph
 | **Framework-agnostic** | Not locked to LangChain, CrewAI, or any orchestrator |
 
 ## Quick Start
+
+Install from PyPI:
+
+```bash
+python -m pip install "context-fabrica[postgres,kuzu,fastembed]"
+```
+
+Then bootstrap and verify:
+
+```bash
+context-fabrica-bootstrap --dsn "postgresql:///context_fabrica"
+context-fabrica-doctor --dsn "postgresql:///context_fabrica"
+context-fabrica-demo --dsn "postgresql:///context_fabrica" --project
+```
 
 ```python
 from context_fabrica import DomainMemoryEngine

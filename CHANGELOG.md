@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0
+## 0.3.0
 
 ### Added
 - in-memory hybrid retrieval engine
@@ -9,3 +9,5 @@
 - staged/canonical/pattern memory tiers
 - bootstrap, demo, doctor, projector, and project-memory CLIs
 - verified package install path and source-first runtime path
+- examples, getting-started guide, CI workflow, and release-facing docs
+- projector replay controls and health checks
