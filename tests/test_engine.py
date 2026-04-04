@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
-from src.context_fabrica.config import ScoringWeights
+from src.context_fabrica.config import NamespacePolicy, ScoringWeights
 from src.context_fabrica.engine import DomainMemoryEngine
 from src.context_fabrica.models import Relation
+from src.context_fabrica.temporal import extract_time_range, temporal_overlap_score
 
 
 def test_query_prefers_graph_connected_record() -> None:
@@ -184,9 +185,11 @@ def test_bm25_only_mode_ignores_embeddings() -> None:
 
 
 def test_configurable_scoring_weights() -> None:
-    weights = ScoringWeights(semantic=0.80, graph=0.10, recency=0.05, confidence=0.05)
+    weights = ScoringWeights(semantic=0.80, graph=0.10, temporal=0.0, recency=0.05, confidence=0.05)
     engine = DomainMemoryEngine(weights=weights)
-    assert engine._weights["semantic"] == 0.80
+    # Weights are normalized to sum to 1.0
+    assert abs(sum(engine._weights.values()) - 1.0) < 1e-9
+    assert engine._weights["semantic"] == 0.80  # 0.80 / 1.0
     assert engine._weights["graph"] == 0.10
 
     engine.ingest("AuthService depends on TokenSigner", record_id="r1", confidence=0.8)
@@ -251,3 +254,212 @@ def test_rrf_scoring_mode() -> None:
     assert any("rrf" in r.rationale for r in results)
     # RRF should still rank related records reasonably
     assert results[0].score > 0
+
+
+def test_temporal_query_prefers_matching_occurrence_window() -> None:
+    engine = DomainMemoryEngine()
+    engine.ingest(
+        "Incident review happened in June 2025 for the auth service.",
+        record_id="june",
+        confidence=0.8,
+    )
+    engine.ingest(
+        "Incident review happened in July 2025 for the auth service.",
+        record_id="july",
+        confidence=0.8,
+    )
+
+    results = engine.query("What happened in June 2025 for the auth service?", top_k=2)
+    assert results
+    assert results[0].record.record_id == "june"
+    assert "temporal_match" in results[0].rationale
+    assert results[0].temporal_score > 0.0
+
+
+def test_namespace_policy_can_constrain_sources_and_confidence() -> None:
+    policy = NamespacePolicy(
+        min_confidence=0.8,
+        source_allowlist=("design-doc",),
+        default_hops=1,
+    )
+    engine = DomainMemoryEngine(namespace_policies={"alpha": policy})
+    strong = engine.ingest("alpha auth flow", source="design-doc", record_id="r1", confidence=0.9)
+    weak = engine.ingest("alpha auth flow draft", source="scratchpad", record_id="r2", confidence=0.6)
+    strong.namespace = "alpha"
+    weak.namespace = "alpha"
+
+    results = engine.query("auth flow", namespace="alpha", top_k=5)
+    assert [result.record.record_id for result in results] == ["r1"]
+
+
+def test_synthesize_observation_creates_provenance_backed_record() -> None:
+    engine = DomainMemoryEngine()
+    engine.ingest("AuthService depends on TokenSigner.", record_id="r1", confidence=0.8, namespace="payments")
+    engine.ingest("AuthService rotates tokens through TokenSigner daily.", record_id="r2", confidence=0.9, namespace="payments")
+
+    observation = engine.synthesize_observation(["r1", "r2"], record_id="obs-1")
+
+    assert observation.record_id == "obs-1"
+    assert observation.kind == "observation"
+    assert observation.stage == "canonical"
+    assert observation.namespace == "payments"
+    assert observation.metadata["derived_from"] == ["r1", "r2"]
+    assert "Synthesized observation" in observation.text
+
+
+def test_optional_reranker_can_reorder_top_results() -> None:
+    class PreferSecond:
+        def score(self, query: str, record) -> float:
+            return 1.0 if record.record_id == "r2" else 0.0
+
+    engine = DomainMemoryEngine(reranker=PreferSecond(), rerank_weight=1.0)
+    engine.ingest("AuthService tokens sessions login middleware", record_id="r1", confidence=0.8)
+    engine.ingest("AuthService", record_id="r2", confidence=0.8)
+
+    baseline = engine.query("AuthService tokens", top_k=2)
+    reranked = engine.query("AuthService tokens", top_k=2, rerank_top_n=2)
+
+    assert baseline[0].record.record_id == "r1"
+    assert reranked[0].record.record_id == "r2"
+    assert reranked[0].rerank_score == 1.0
+    assert "reranked" in reranked[0].rationale
+
+
+def test_reranker_can_promote_result_from_below_top_k_cutoff() -> None:
+    class PreferThird:
+        def score(self, query: str, record) -> float:
+            return 1.0 if record.record_id == "r3" else 0.0
+
+    engine = DomainMemoryEngine(reranker=PreferThird(), rerank_weight=1.0)
+    engine.ingest("auth service tokens login sessions middleware", record_id="r1", confidence=0.8)
+    engine.ingest("auth service tokens login", record_id="r2", confidence=0.8)
+    engine.ingest("auth service", record_id="r3", confidence=0.8)
+
+    baseline = engine.query("auth service tokens", top_k=2)
+    reranked = engine.query("auth service tokens", top_k=2, rerank_top_n=3)
+
+    assert all(result.record.record_id != "r3" for result in baseline)
+    assert reranked[0].record.record_id == "r3"
+    assert reranked[0].rerank_score == 1.0
+
+
+def test_temporal_query_does_not_match_boundary_touching_event() -> None:
+    engine = DomainMemoryEngine()
+    engine.ingest(
+        "Quarterly report published on 2025-07-01.",
+        record_id="july-1",
+        confidence=0.8,
+    )
+    engine.ingest(
+        "Quarterly report published on 2025-06-15.",
+        record_id="june-15",
+        confidence=0.8,
+    )
+
+    results = engine.query("What happened in June 2025?", top_k=5)
+
+    by_id = {result.record.record_id: result for result in results}
+    assert "june-15" in by_id
+    assert by_id["june-15"].temporal_score > 0.0
+    assert "july-1" in by_id
+    assert by_id["july-1"].temporal_score == 0.0
+    assert [result.record.record_id for result in results].index("june-15") < [result.record.record_id for result in results].index("july-1")
+
+
+# --- temporal.py unit tests ---
+
+
+def test_extract_time_range_yesterday() -> None:
+    now = datetime(2025, 7, 15, 12, 0, tzinfo=timezone.utc)
+    result = extract_time_range("what happened yesterday?", now=now)
+    assert result is not None
+    assert result[0] == datetime(2025, 7, 14, tzinfo=timezone.utc)
+    assert result[1] == datetime(2025, 7, 15, tzinfo=timezone.utc)
+
+
+def test_extract_time_range_last_week() -> None:
+    now = datetime(2025, 7, 15, 12, 0, tzinfo=timezone.utc)  # Tuesday
+    result = extract_time_range("what happened last week?", now=now)
+    assert result is not None
+    start, end = result
+    assert (end - start).days == 7
+
+
+def test_extract_time_range_iso_date() -> None:
+    result = extract_time_range("Report from 2025-06-15 was important", now=datetime(2025, 7, 1, tzinfo=timezone.utc))
+    assert result is not None
+    assert result[0] == datetime(2025, 6, 15, tzinfo=timezone.utc)
+    assert result[1] == datetime(2025, 6, 16, tzinfo=timezone.utc)
+
+
+def test_extract_time_range_returns_none_for_no_temporal_cues() -> None:
+    assert extract_time_range("AuthService depends on TokenSigner") is None
+
+
+def test_temporal_overlap_score_no_overlap() -> None:
+    query = (datetime(2025, 6, 1, tzinfo=timezone.utc), datetime(2025, 7, 1, tzinfo=timezone.utc))
+    score = temporal_overlap_score(
+        datetime(2025, 7, 1, tzinfo=timezone.utc),
+        datetime(2025, 7, 2, tzinfo=timezone.utc),
+        query,
+    )
+    assert score == 0.0
+
+
+def test_temporal_overlap_score_full_overlap() -> None:
+    query = (datetime(2025, 6, 1, tzinfo=timezone.utc), datetime(2025, 7, 1, tzinfo=timezone.utc))
+    score = temporal_overlap_score(
+        datetime(2025, 6, 1, tzinfo=timezone.utc),
+        datetime(2025, 7, 1, tzinfo=timezone.utc),
+        query,
+    )
+    assert score == 1.0
+
+
+def test_temporal_overlap_score_partial() -> None:
+    query = (datetime(2025, 6, 1, tzinfo=timezone.utc), datetime(2025, 7, 1, tzinfo=timezone.utc))
+    score = temporal_overlap_score(
+        datetime(2025, 6, 15, tzinfo=timezone.utc),
+        datetime(2025, 7, 15, tzinfo=timezone.utc),
+        query,
+    )
+    assert 0.0 < score < 1.0
+
+
+# --- RRF + temporal ---
+
+
+def test_rrf_scoring_with_temporal_signal() -> None:
+    engine = DomainMemoryEngine(scoring="rrf")
+    engine.ingest(
+        "Incident review happened in June 2025.",
+        record_id="june",
+        confidence=0.8,
+    )
+    engine.ingest(
+        "Incident review happened in July 2025.",
+        record_id="july",
+        confidence=0.8,
+    )
+    results = engine.query("What happened in June 2025?", top_k=2)
+    assert results
+    assert any("rrf" in r.rationale for r in results)
+    assert results[0].record.record_id == "june"
+    assert "temporal_match" in results[0].rationale
+
+
+# --- Reranker edge case: single result ---
+
+
+def test_reranker_with_single_result_returns_none_rerank_score() -> None:
+    class AlwaysOne:
+        def score(self, query: str, record) -> float:
+            return 1.0
+
+    engine = DomainMemoryEngine(reranker=AlwaysOne(), rerank_weight=0.5)
+    engine.ingest("auth service tokens", record_id="r1", confidence=0.8)
+
+    results = engine.query("auth service tokens", top_k=1, rerank_top_n=5)
+    assert len(results) == 1
+    assert results[0].rerank_score is None
+    assert "reranked" not in results[0].rationale

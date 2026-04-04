@@ -44,6 +44,7 @@ class HybridMemoryStore:
         graph: GraphStore | None = None,
         embedder: Embedder | None = None,
     ) -> None:
+        self.settings = settings
         if store is not None:
             self.store: RecordStore = store
             self.graph: GraphStore | None = graph
@@ -55,6 +56,9 @@ class HybridMemoryStore:
         else:
             raise TypeError("Provide either 'store' or 'settings'")
 
+        # Backward-compatible aliases used by older call sites and tests.
+        self.postgres = self.store if isinstance(self.store, PostgresPgvectorAdapter) else None
+        self.kuzu = self.graph if isinstance(self.graph, KuzuGraphProjectionAdapter) else None
         self.embedder = embedder or build_default_embedder(dimensions=dims)
 
     def bootstrap(self) -> None:

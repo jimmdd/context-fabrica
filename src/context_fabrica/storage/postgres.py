@@ -48,12 +48,16 @@ class PostgresPgvectorAdapter:
             "valid_from TIMESTAMPTZ NOT NULL, "
             "valid_to TIMESTAMPTZ NULL, "
             "supersedes TEXT NULL, "
-            "reviewed_at TIMESTAMPTZ NULL"
+            "reviewed_at TIMESTAMPTZ NULL, "
+            "occurred_from TIMESTAMPTZ NULL, "
+            "occurred_to TIMESTAMPTZ NULL"
             ");",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'default';",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS memory_stage TEXT NOT NULL DEFAULT 'canonical';",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS memory_kind TEXT NOT NULL DEFAULT 'fact';",
             f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL;",
+            f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS occurred_from TIMESTAMPTZ NULL;",
+            f"ALTER TABLE {schema}.memory_records ADD COLUMN IF NOT EXISTS occurred_to TIMESTAMPTZ NULL;",
             f"CREATE TABLE IF NOT EXISTS {schema}.memory_chunks ("
             "chunk_id BIGSERIAL PRIMARY KEY, "
             f"record_id TEXT NOT NULL REFERENCES {schema}.memory_records(record_id) ON DELETE CASCADE, "
@@ -130,8 +134,8 @@ class PostgresPgvectorAdapter:
         schema = self.settings.schema
         return (
             f"INSERT INTO {schema}.memory_records ("
-            "record_id, text_content, source, domain, namespace, confidence, memory_stage, memory_kind, tags, metadata, created_at, valid_from, valid_to, supersedes, reviewed_at"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s) "
+            "record_id, text_content, source, domain, namespace, confidence, memory_stage, memory_kind, tags, metadata, created_at, valid_from, valid_to, supersedes, reviewed_at, occurred_from, occurred_to"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (record_id) DO UPDATE SET "
             "text_content = EXCLUDED.text_content, "
             "source = EXCLUDED.source, "
@@ -146,7 +150,9 @@ class PostgresPgvectorAdapter:
             "valid_from = EXCLUDED.valid_from, "
             "valid_to = EXCLUDED.valid_to, "
             "supersedes = EXCLUDED.supersedes, "
-            "reviewed_at = EXCLUDED.reviewed_at;"
+            "reviewed_at = EXCLUDED.reviewed_at, "
+            "occurred_from = EXCLUDED.occurred_from, "
+            "occurred_to = EXCLUDED.occurred_to;"
         )
 
     def replace_chunks_statement(self) -> str:
@@ -175,7 +181,7 @@ class PostgresPgvectorAdapter:
         schema = self.settings.schema
         return (
             f"SELECT record_id, text_content, source, domain, namespace, confidence, memory_stage, memory_kind, tags, metadata, "
-            "created_at, valid_from, valid_to, supersedes, reviewed_at "
+            "created_at, valid_from, valid_to, supersedes, reviewed_at, occurred_from, occurred_to "
             f"FROM {schema}.memory_records WHERE record_id = %s;"
         )
 
@@ -265,7 +271,7 @@ class PostgresPgvectorAdapter:
         return (
             f"SELECT r.record_id, r.text_content, r.source, r.domain, r.namespace, r.confidence, "
             "r.memory_stage, r.memory_kind, r.tags, r.metadata, "
-            "r.created_at, r.valid_from, r.valid_to, r.supersedes, r.reviewed_at, "
+            "r.created_at, r.valid_from, r.valid_to, r.supersedes, r.reviewed_at, r.occurred_from, r.occurred_to, "
             "1 - (c.embedding <=> %s) AS semantic_score "
             f"FROM {schema}.memory_chunks c "
             f"JOIN {schema}.memory_records r ON r.record_id = c.record_id "
@@ -294,6 +300,8 @@ class PostgresPgvectorAdapter:
             record.valid_to,
             record.supersedes,
             record.reviewed_at,
+            record.occurred_from,
+            record.occurred_to,
         )
 
     def bootstrap(self) -> None:
@@ -388,7 +396,7 @@ class PostgresPgvectorAdapter:
         query = (
             f"SELECT record_id, text_content, source, domain, namespace, confidence, "
             "memory_stage, memory_kind, tags, metadata, "
-            "created_at, valid_from, valid_to, supersedes, reviewed_at "
+            "created_at, valid_from, valid_to, supersedes, reviewed_at, occurred_from, occurred_to "
             f"FROM {schema}.memory_records WHERE 1=1 "
         )
         params: list[object] = []
@@ -427,6 +435,8 @@ class PostgresPgvectorAdapter:
             valid_to=row[12],
             supersedes=row[13],
             reviewed_at=row[14],
+            occurred_from=row[15],
+            occurred_to=row[16],
         )
 
     def expire_records(self, *, before: datetime) -> int:
@@ -663,8 +673,8 @@ class PostgresPgvectorAdapter:
         return vector_cls(values)
 
     def _row_to_query_result(self, row: tuple[Any, ...]) -> QueryResult:
-        record = self._row_to_record(row[:15])
-        semantic_score = float(row[15])
+        record = self._row_to_record(row[:17])
+        semantic_score = float(row[17])
         return QueryResult(
             record=record,
             score=semantic_score,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from math import sqrt
@@ -60,7 +61,9 @@ class SQLiteRecordStore:
                 valid_from TEXT NOT NULL,
                 valid_to TEXT,
                 supersedes TEXT,
-                reviewed_at TEXT
+                reviewed_at TEXT,
+                occurred_from TEXT,
+                occurred_to TEXT
             );
 
             CREATE TABLE IF NOT EXISTS memory_chunks (
@@ -106,7 +109,21 @@ class SQLiteRecordStore:
             CREATE INDEX IF NOT EXISTS idx_relations_source ON memory_relations(source_entity);
             CREATE INDEX IF NOT EXISTS idx_relations_target ON memory_relations(target_entity);
         """)
+        self._ensure_record_column("occurred_from", "TEXT")
+        self._ensure_record_column("occurred_to", "TEXT")
         self.conn.commit()
+
+    _SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+    def _ensure_record_column(self, name: str, column_type: str) -> None:
+        if not self._SAFE_IDENTIFIER.match(name) or not self._SAFE_IDENTIFIER.match(column_type):
+            raise ValueError(f"Invalid column name or type: {name!r} {column_type!r}")
+        columns = {
+            str(row[1])
+            for row in self.conn.execute("PRAGMA table_info(memory_records)").fetchall()
+        }
+        if name not in columns:
+            self.conn.execute(f"ALTER TABLE memory_records ADD COLUMN {name} {column_type}")
 
     def _upsert_record_params(self, record: KnowledgeRecord) -> tuple[Any, ...]:
         return (
@@ -125,13 +142,15 @@ class SQLiteRecordStore:
             record.valid_to.isoformat() if record.valid_to else None,
             record.supersedes,
             record.reviewed_at.isoformat() if record.reviewed_at else None,
+            record.occurred_from.isoformat() if record.occurred_from else None,
+            record.occurred_to.isoformat() if record.occurred_to else None,
         )
 
     _UPSERT_SQL = """INSERT INTO memory_records (
             record_id, text_content, source, domain, namespace, confidence,
             memory_stage, memory_kind, tags, metadata,
-            created_at, valid_from, valid_to, supersedes, reviewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, valid_from, valid_to, supersedes, reviewed_at, occurred_from, occurred_to
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(record_id) DO UPDATE SET
             text_content=excluded.text_content,
             source=excluded.source,
@@ -146,7 +165,9 @@ class SQLiteRecordStore:
             valid_from=excluded.valid_from,
             valid_to=excluded.valid_to,
             supersedes=excluded.supersedes,
-            reviewed_at=excluded.reviewed_at
+            reviewed_at=excluded.reviewed_at,
+            occurred_from=excluded.occurred_from,
+            occurred_to=excluded.occurred_to
         """
 
     def upsert_record(self, record: KnowledgeRecord) -> None:
@@ -177,7 +198,7 @@ class SQLiteRecordStore:
         row = self.conn.execute(
             "SELECT record_id, text_content, source, domain, namespace, confidence, "
             "memory_stage, memory_kind, tags, metadata, "
-            "created_at, valid_from, valid_to, supersedes, reviewed_at "
+            "created_at, valid_from, valid_to, supersedes, reviewed_at, occurred_from, occurred_to "
             "FROM memory_records WHERE record_id = ?",
             (record_id,),
         ).fetchone()
@@ -226,7 +247,7 @@ class SQLiteRecordStore:
         query = (
             "SELECT record_id, text_content, source, domain, namespace, confidence, "
             "memory_stage, memory_kind, tags, metadata, "
-            "created_at, valid_from, valid_to, supersedes, reviewed_at "
+            "created_at, valid_from, valid_to, supersedes, reviewed_at, occurred_from, occurred_to "
             "FROM memory_records WHERE 1=1 "
         )
         params: list[Any] = []
@@ -347,7 +368,7 @@ class SQLiteRecordStore:
         query = (
             "SELECT r.record_id, r.text_content, r.source, r.domain, r.namespace, r.confidence, "
             "r.memory_stage, r.memory_kind, r.tags, r.metadata, "
-            "r.created_at, r.valid_from, r.valid_to, r.supersedes, r.reviewed_at, "
+            "r.created_at, r.valid_from, r.valid_to, r.supersedes, r.reviewed_at, r.occurred_from, r.occurred_to, "
             "c.embedding "
             "FROM memory_chunks c "
             "JOIN memory_records r ON r.record_id = c.record_id "
@@ -368,7 +389,7 @@ class SQLiteRecordStore:
 
         scored: list[tuple[float, Any]] = []
         for row in rows:
-            embedding_json = row[15]
+            embedding_json = row[17]
             if embedding_json is None:
                 continue
             stored_embedding = json.loads(embedding_json)
@@ -380,7 +401,7 @@ class SQLiteRecordStore:
 
         results: list[QueryResult] = []
         for score, row in scored[:top_k]:
-            record = self._row_to_record(row[:15])
+            record = self._row_to_record(row[:17])
             results.append(
                 QueryResult(
                     record=record,
@@ -419,4 +440,6 @@ class SQLiteRecordStore:
             valid_to=datetime.fromisoformat(str(row[12])) if row[12] else None,
             supersedes=str(row[13]) if row[13] else None,
             reviewed_at=datetime.fromisoformat(str(row[14])) if row[14] else None,
+            occurred_from=datetime.fromisoformat(str(row[15])) if row[15] else None,
+            occurred_to=datetime.fromisoformat(str(row[16])) if row[16] else None,
         )

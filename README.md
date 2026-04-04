@@ -2,9 +2,9 @@
 
 # context-fabrica
 
-**A hybrid memory substrate for AI agents that need durable, queryable knowledge.**
+**A governed memory layer built specifically for coding knowledge—giving agents durable recall, relation awareness, and evidence they can explain.**
 
-Semantic retrieval + knowledge graph traversal + curated memory tiers — in one library.
+Hybrid retrieval, graph reasoning, temporal recall, provenance-backed synthesis, and policy controls in one composable library.
 
 [![CI](https://github.com/TaskForest/context-fabrica/actions/workflows/ci.yml/badge.svg)](https://github.com/TaskForest/context-fabrica/actions)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -18,25 +18,37 @@ Semantic retrieval + knowledge graph traversal + curated memory tiers — in one
 
 ## The Problem
 
-Most agent memory is flat vector search. That works for "find similar text" but fails when agents need to reason about **how concepts connect** — service dependencies, ownership chains, architectural decisions and their downstream effects.
-
-Agents also need to know **where a fact came from**, **whether it's still valid**, and **how confident they should be** in it. Session recall isn't enough.
+Flat vector memory fails autonomous coding agents. Without the ability to trace provenance, relate concepts across a codebase, or understand temporal validity, agents cannot distinguish between deeply vetted architectural rules and outdated drafts. Session recall isn't enough—agents need memory they can govern, trust, and safely update over time.
 
 ## What context-fabrica Does
+
+`context-fabrica` is a composable library that combines semantic retrieval, graph traversal, and temporal recall so agents can genuinely reason about their memory. By treating provenance, validity, curation stage, and supersession as first-class data rather than afterthought metadata, it enables agents to justify their answers rather than just retrieving vaguely similar text.
 
 ```
 Query: "How does PaymentsService interact with LedgerAdapter?"
 
   Semantic score ──── 0.72  (embedding similarity + BM25 lexical boost)
   Graph score ─────── 0.85  (2-hop traversal: PaymentsService → depends_on → LedgerAdapter)
+  Temporal score ──── 0.00  (not a time-scoped query)
   Recency score ───── 0.91  (ingested 3 hours ago)
   Confidence score ── 0.80  (from design-doc source)
                       ────
-  Final score ─────── 0.81  (hybrid weighted fusion)
+  Final score ─────── 0.66  (hybrid weighted fusion)
   Rationale: [semantic_match, graph_relation, recent, high_confidence]
 ```
 
 Every query returns **scored results with full breakdowns** — your agents can reason about *why* a memory was relevant, not just *that* it was.
+
+---
+
+## Perfect for Self-Learning & Self-Improving Agents
+
+`context-fabrica` was designed to give coding agents the scaffolding they need to reason about their own growth and incrementally improve over time:
+
+- **Observation Synthesis:** Agents can piece together raw, disparate facts over time and explicitly *synthesize* them into foundational insights (e.g., "The auth framework in this repo is unstable around token refresh").
+- **Memory Tiers & Promotion:** "I saw something once" is not "This is a factual rule." Agents can log low-confidence observations in a `staged` tier. If the observation proves true repeatedly, it gets promoted to `canonical` or extracted as a reusable `pattern` applied to future tasks.
+- **Supersession & Error Correction:** When an agent realizes a past assumption was incorrect, it uses supersession chains (soft invalidation). This means it remembers both what it *previously* thought and *why* it updated its understanding, rather than destructively overwriting past knowledge.
+- **Temporal Recall:** Agents can explicitly time-scope memories to avoid confusing legacy system knowledge with the current state of a codebase.
 
 ---
 
@@ -51,6 +63,7 @@ context-fabrica separates **what is core** (the retrieval model, memory semantic
   │  DomainMemoryEngine        Hybrid scoring formula        │
   │  KnowledgeRecord model     Memory tiers & promotion      │
   │  Validity windows          Provenance tracking           │
+  │  Temporal recall           Namespace policies            │
   │  BM25 lexical index        Knowledge graph traversal     │
   └──────────────────────────────────────────────────────────┘
                           │
@@ -174,12 +187,16 @@ store = HybridMemoryStore(store=MyLanceDBStore(), graph=MyGraphStore())  # graph
 | Feature | Description |
 |---------|-------------|
 | **Hybrid retrieval** | Embedding cosine similarity + BM25 lexical boost + graph traversal, fused into one score |
+| **Temporal retrieval** | Time-aware recall for queries like "what happened in June 2025?" |
 | **Knowledge graph** | Entity-relation extraction with multi-hop traversal (configurable depth) |
 | **Curated memory tiers** | `staged` (draft) -> `canonical` (reviewed) -> `pattern` (reusable) |
+| **Observation synthesis** | Explicitly synthesize provenance-backed observation records from multiple facts |
 | **Soft invalidation** | Validity windows (`valid_from`/`valid_to`) instead of hard deletes |
 | **Promotion provenance** | Track when, why, and by whom records were promoted |
+| **Namespace policies** | Per-namespace retrieval controls for hops, confidence floor, source allowlists, and reranking |
 | **Caller-provided extraction** | Pass your own entities and relations from an upstream LLM — or use built-in heuristics |
-| **Scoring modes** | `hybrid` (default), `embedding`-only, or `bm25`-only |
+| **Optional reranking** | Add a second-stage reranker on top of hybrid or RRF retrieval when precision matters |
+| **Scoring modes** | `hybrid` (default), `embedding`-only, `bm25`-only, or `rrf` |
 | **Pluggable storage** | SQLite (built-in), Postgres + pgvector, or bring your own via `RecordStore` protocol |
 | **Pluggable embedders** | HashEmbedder (zero-dep), FastEmbed, SentenceTransformers, or bring your own via `Embedder` protocol |
 | **Optional graph store** | Kuzu ships as default, but graph projection is fully optional |
@@ -202,10 +219,19 @@ context-fabrica-demo --dsn "postgresql:///context_fabrica" --project
 ```
 
 ```python
-from context_fabrica import DomainMemoryEngine
+from context_fabrica import DomainMemoryEngine, NamespacePolicy, ScoringWeights, TokenOverlapReranker
 from context_fabrica.models import Relation
 
-engine = DomainMemoryEngine()  # or DomainMemoryEngine(scoring="embedding")
+engine = DomainMemoryEngine(
+    reranker=TokenOverlapReranker(),
+    namespace_policies={
+        "payments": NamespacePolicy(
+            min_confidence=0.75,
+            source_allowlist=("design-doc", "runbook"),
+            rerank_top_n=5,
+        )
+    },
+)  # or DomainMemoryEngine(scoring="embedding")
 
 # Ingest with automatic entity/relation extraction
 engine.ingest(
@@ -232,6 +258,22 @@ engine.ingest(
 results = engine.query("How does PaymentsService interact with LedgerAdapter?", top_k=3)
 for hit in results:
     print(f"{hit.record.record_id}  score={hit.score:.2f}  {hit.rationale}")
+
+# Temporal recall
+incident = engine.ingest(
+    "Quarterly incident review happened in June 2025.",
+    source="incident",
+    domain="platform",
+    confidence=0.9,
+    record_id="incident-june",
+)
+time_scoped = engine.query("What happened in June 2025?", top_k=3)
+
+# Observation synthesis — combine multiple facts into one provenance-backed record
+engine.ingest("AuthService depends on TokenSigner.", record_id="f1", confidence=0.8)
+engine.ingest("TokenSigner rotates keys daily.", record_id="f2", confidence=0.9)
+observation = engine.synthesize_observation(["f1", "f2"], record_id="obs-1")
+assert observation.metadata["derived_from"] == ["f1", "f2"]
 ```
 
 ## Architecture
@@ -246,21 +288,44 @@ for hit in results:
                     |  (in-process)     |
                     +--------+---------+
                              |
-              +--------------+--------------+
-              |              |              |
-     +--------v---+  +------v------+  +----v-------+
-     | Embedding  |  | BM25 Lexical|  | Knowledge  |
-     | Similarity |  | Index       |  | Graph      |
-     +------+-----+  +-------------+  +-----+------+
-            |                                |
-       (pluggable)                     multi-hop BFS
-                                       with decay
+         +----------+--------+--------+----------+
+         |          |                 |           |
+  +------v---+ +---v--------+ +-----v------+ +--v--------+
+  | Embedding| | BM25       | | Knowledge  | | Temporal  |
+  | Similarity | Lexical    | | Graph      | | Overlap   |
+  +------+---+ | Index      | +-----+------+ +--+--------+
+         |     +------------+       |            |
+    (pluggable)              multi-hop BFS  occurrence
+                              with decay    windows
 ```
 
-**Scoring formula:**
-`0.50 * semantic + 0.30 * graph + 0.12 * recency + 0.08 * confidence`
+**Scoring formula (default weights, normalized to sum to 1.0):**
+`0.42 * semantic + 0.25 * graph + 0.15 * temporal + 0.10 * recency + 0.07 * confidence`
 
 Where semantic = `0.70 * embedding + 0.30 * BM25` in hybrid mode.
+Weights are always normalized at query time, so custom values don't need to sum to 1.0.
+
+Temporal scoring is neutral unless the query or record carries time information.
+
+### Namespace Policies
+
+Use namespace policies when one team or agent needs stricter retrieval than another without forking the engine:
+
+```python
+from context_fabrica import DomainMemoryEngine, NamespacePolicy, ScoringWeights
+
+engine = DomainMemoryEngine(
+    namespace_policies={
+        "production-ops": NamespacePolicy(
+            weights=ScoringWeights(semantic=0.45, graph=0.25, temporal=0.25, recency=0.10, confidence=0.10),
+            min_confidence=0.8,
+            source_allowlist=("runbook", "incident", "design-doc"),
+            default_hops=1,
+            rerank_top_n=8,
+        )
+    }
+)
+```
 
 ### Persistent Storage
 
@@ -362,11 +427,13 @@ context-fabrica-project-memory bootstrap --root .
 | Primitive | Purpose |
 |-----------|---------|
 | `valid_from` / `valid_to` | Temporal validity windows, enables as-of queries |
+| `occurred_from` / `occurred_to` | Event-time windows for time-scoped recall |
 | `invalidate_record()` | Soft deletion with reason tracking |
 | `stage` / `kind` | Promotion routing and curated retrieval |
 | `reviewed_at` | Promotion auditability |
 | `confidence` | Trust prior in ranking |
 | `source` / `metadata` | Provenance for policy gates |
+| `namespace` / `NamespacePolicy` | Tenant isolation plus namespace-specific retrieval controls |
 | `supersedes` | Record replacement chains |
 
 ## Project Structure
@@ -377,6 +444,9 @@ src/context_fabrica/
   models.py          # KnowledgeRecord, Relation, QueryResult (core)
   adapters.py        # RecordStore, GraphStore, Embedder protocols (core)
   policy.py          # Memory tier routing and promotion (core)
+  temporal.py        # Time-range extraction and temporal overlap scoring
+  synthesis.py       # Provenance-backed observation synthesis
+  reranking.py       # Optional second-stage rerankers
   entity.py          # Entity/relation extraction heuristics (core, bypassable)
   index.py           # BM25 lexical index (core)
   graph.py           # In-memory knowledge graph with BFS traversal (core)
@@ -387,7 +457,7 @@ src/context_fabrica/
     kuzu.py          # Kuzu graph projection adapter (pluggable, optional)
     hybrid.py        # HybridMemoryStore — orchestrates any RecordStore + GraphStore
     projector.py     # Background projection worker
-tests/               # pytest suite (37 tests)
+tests/               # pytest suite, including live Postgres coverage
 docs/                # Architecture docs and getting-started guide
 examples/            # Runnable usage examples
 sql/                 # Postgres bootstrap and smoke test SQL
@@ -402,28 +472,6 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest
 ```
-
-## Roadmap
-
-- [x] Pluggable storage backends via `RecordStore` protocol
-- [x] SQLite adapter for zero-setup persistent storage
-- [x] Optional graph projection (Kuzu not required)
-- [x] Caller-provided entity/relation extraction
-- [x] Configurable scoring modes (hybrid, embedding, bm25)
-- [x] Pluggable storage backends via `RecordStore` protocol
-- [x] SQLite adapter for zero-setup persistent storage
-- [x] Optional graph projection (Kuzu not required)
-- [x] Caller-provided entity/relation extraction
-- [x] Configurable scoring modes (hybrid, embedding, bm25, rrf)
-- [x] Configurable hybrid ranking weights via `ScoringWeights`
-- [x] Multi-tenant namespaces (per agent/team isolation)
-- [x] Memory lifecycle policies (TTL, decay, purge)
-- [x] Embedding dimension bootstrap migration (auto-resize on dimension change)
-- [x] Conflict handling (supersession chains, `supersede_record()`)
-- [x] Reciprocal Rank Fusion (RRF) scoring mode
-- [x] Feedback loop primitives (`record_outcome()`, `outcome_summary()`)
-- [ ] Pluggable graph adapters (Neo4j, Memgraph)
-- [ ] Additional vector stores (LanceDB, FAISS)
 
 ## References
 

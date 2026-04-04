@@ -8,8 +8,8 @@ README = Path(__file__).with_name("README.md").read_text(encoding="utf-8")
 
 setup(
     name="context-fabrica",
-    version="0.3.0",
-    description="Hybrid graph + semantic memory substrate for AI agents",
+    version="0.4.0",
+    description="Governed agent memory with hybrid retrieval, temporal recall, and graph reasoning",
     long_description=README,
     long_description_content_type="text/markdown",
     python_requires=">=3.9",

@@ -1,9 +1,10 @@
 from .adapters import GraphStore, RecordStore
 from .embedding import FastEmbedEmbedder, HashEmbedder, SentenceTransformerEmbedder, build_default_embedder, chunk_text
-from .config import HybridStoreSettings, KuzuSettings, PostgresSettings, ScoringWeights
+from .config import HybridStoreSettings, KuzuSettings, NamespacePolicy, PostgresSettings, ScoringWeights
 from .engine import DomainMemoryEngine
 from .models import KnowledgeRecord, QueryResult
 from .policy import PromotionDecision, decide_memory_tier, promote_record
+from .reranking import TokenOverlapReranker
 from .storage import GraphProjectionWorker, HybridMemoryStore, SQLiteRecordStore
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "HybridStoreSettings",
     "KuzuSettings",
     "KnowledgeRecord",
+    "NamespacePolicy",
     "PostgresSettings",
     "PromotionDecision",
     "QueryResult",
@@ -23,6 +25,7 @@ __all__ = [
     "ScoringWeights",
     "SQLiteRecordStore",
     "SentenceTransformerEmbedder",
+    "TokenOverlapReranker",
     "build_default_embedder",
     "chunk_text",
     "decide_memory_tier",

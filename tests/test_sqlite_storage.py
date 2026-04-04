@@ -268,6 +268,29 @@ def test_sqlite_semantic_search_returns_complete_records(tmp_path) -> None:
     store.close()
 
 
+def test_sqlite_round_trips_occurrence_fields(tmp_path) -> None:
+    store = SQLiteRecordStore(str(tmp_path / "test.db"))
+    store.bootstrap()
+    occurred_from = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    occurred_to = datetime(2025, 6, 30, tzinfo=timezone.utc)
+
+    record = KnowledgeRecord(
+        record_id="r1",
+        text="June incident review",
+        source="doc",
+        confidence=0.8,
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
+    )
+    store.upsert_record(record)
+    fetched = store.fetch_record("r1")
+
+    assert fetched is not None
+    assert fetched.occurred_from == occurred_from
+    assert fetched.occurred_to == occurred_to
+    store.close()
+
+
 def test_sqlite_namespace_isolation(tmp_path) -> None:
     store = SQLiteRecordStore(str(tmp_path / "test.db"))
     store.bootstrap()

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 MemoryStage = Literal["staged", "canonical", "pattern"]
-MemoryKind = Literal["fact", "workflow", "pattern", "note"]
+MemoryKind = Literal["fact", "workflow", "pattern", "note", "observation"]
 
 
 @dataclass
@@ -25,6 +25,8 @@ class KnowledgeRecord:
     stage: MemoryStage = "canonical"
     kind: MemoryKind = "fact"
     reviewed_at: datetime | None = None
+    occurred_from: datetime | None = None
+    occurred_to: datetime | None = None
 
 
 @dataclass
@@ -41,6 +43,8 @@ class QueryResult:
     score: float
     semantic_score: float
     graph_score: float
-    recency_score: float
-    confidence_score: float
-    rationale: list[str]
+    temporal_score: float = 0.0
+    recency_score: float = 0.0
+    confidence_score: float = 0.0
+    rationale: list[str] = field(default_factory=list)
+    rerank_score: float | None = None

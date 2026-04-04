@@ -84,6 +84,12 @@ class GraphStore(Protocol):
     def project(self, projection: Any, *, domain: str, source: str) -> None: ...
 
 
+class Reranker(Protocol):
+    """Protocol for optional second-stage rerankers."""
+
+    def score(self, query: str, record: KnowledgeRecord) -> float: ...
+
+
 class TrustPolicyAdapter(Protocol):
     def is_source_allowed(self, source: str) -> bool: ...
 
