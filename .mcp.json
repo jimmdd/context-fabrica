@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "context-fabrica": {
+      "command": "context-fabrica-mcp",
+      "args": ["--db", "./context-fabrica-memory.db", "--namespace", "default"]
+    }
+  }
+}

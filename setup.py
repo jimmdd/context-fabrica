@@ -8,7 +8,7 @@ README = Path(__file__).with_name("README.md").read_text(encoding="utf-8")
 
 setup(
     name="context-fabrica",
-    version="0.4.0",
+    version="0.5.0",
     description="Governed agent memory with hybrid retrieval, temporal recall, and graph reasoning",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -62,6 +62,7 @@ setup(
             "context-fabrica-doctor=context_fabrica.doctor_cli:main",
             "context-fabrica-projector=context_fabrica.projector_cli:main",
             "context-fabrica-project-memory=context_fabrica.project_memory_cli:main",
+            "context-fabrica-mcp=context_fabrica.mcp_server:main",
         ]
     },
 )

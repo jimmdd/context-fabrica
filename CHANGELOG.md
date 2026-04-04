@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+- zero-dependency MCP server (`context-fabrica-mcp`) for agent tool discovery over stdio
+- Claude Code slash commands: `/remember`, `/recall`, `/synthesize`, `/memory-status`
+- `.mcp.json` project config for drop-in Claude Code integration
+- CLI `--namespace` flag and `occurred_from`/`occurred_to` support in JSONL ingestion
+
 ## 0.4.0
 
 ### Added

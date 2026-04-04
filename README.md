@@ -389,11 +389,71 @@ engine = DomainMemoryEngine(
 )
 ```
 
+## MCP Server (Model Context Protocol)
+
+context-fabrica ships a zero-dependency MCP server that any MCP-compatible client (Claude Code, Cursor, etc.) can discover and use. The server runs locally as a subprocess — no hosting required.
+
+**Install and configure:**
+
+```bash
+pip install context-fabrica
+```
+
+Add to your project's `.mcp.json` (or `~/.claude/settings.json` for global use):
+
+```json
+{
+  "mcpServers": {
+    "context-fabrica": {
+      "command": "context-fabrica-mcp",
+      "args": ["--db", "./memory.db", "--namespace", "myproject"]
+    }
+  }
+}
+```
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `remember` | Store a fact, observation, or insight in long-term memory |
+| `recall` | Search memory for relevant knowledge with scored results |
+| `synthesize` | Combine multiple facts into a provenance-backed observation |
+| `promote` | Promote a staged draft memory to canonical status |
+| `invalidate` | Soft-delete a memory that is no longer valid |
+| `supersede` | Replace an existing memory with an updated version |
+
+Once configured, your agent can use these tools directly:
+
+```
+Agent: "Let me check if I already know about the auth service architecture."
+→ calls recall("auth service architecture")
+
+Agent: "I learned that TokenSigner rotates keys daily. Let me remember that."
+→ calls remember("TokenSigner rotates keys daily", source="code-review", confidence=0.9)
+```
+
+## Claude Code Skills
+
+If you're using Claude Code, context-fabrica includes slash commands that wrap the MCP tools:
+
+| Command | Description |
+|---------|-------------|
+| `/remember <text>` | Store knowledge in memory |
+| `/recall <query>` | Search memory for relevant facts |
+| `/synthesize <ids or topic>` | Synthesize an observation from multiple facts |
+| `/memory-status` | Overview of what's stored in memory |
+
+These commands are defined in `.claude/commands/` and work automatically when the MCP server is configured.
+
 ## CLI
 
 ```bash
 # Query from JSONL dataset
 context-fabrica --dataset records.jsonl --query "How is TokenSigner connected?" --top-k 5
+
+# MCP server (usually started by the client, but can run manually)
+context-fabrica-mcp --db ./memory.db --namespace myproject
 
 # Postgres operations
 context-fabrica-bootstrap --dsn "postgresql:///context_fabrica"
@@ -442,11 +502,12 @@ context-fabrica-project-memory bootstrap --root .
 src/context_fabrica/
   engine.py          # In-process hybrid retrieval engine (core)
   models.py          # KnowledgeRecord, Relation, QueryResult (core)
-  adapters.py        # RecordStore, GraphStore, Embedder protocols (core)
+  adapters.py        # RecordStore, GraphStore, Embedder, Reranker protocols (core)
   policy.py          # Memory tier routing and promotion (core)
   temporal.py        # Time-range extraction and temporal overlap scoring
   synthesis.py       # Provenance-backed observation synthesis
   reranking.py       # Optional second-stage rerankers
+  mcp_server.py      # Zero-dependency MCP server over stdio
   entity.py          # Entity/relation extraction heuristics (core, bypassable)
   index.py           # BM25 lexical index (core)
   graph.py           # In-memory knowledge graph with BFS traversal (core)
@@ -457,6 +518,8 @@ src/context_fabrica/
     kuzu.py          # Kuzu graph projection adapter (pluggable, optional)
     hybrid.py        # HybridMemoryStore — orchestrates any RecordStore + GraphStore
     projector.py     # Background projection worker
+.claude/commands/    # Claude Code slash commands (/remember, /recall, /synthesize, /memory-status)
+.mcp.json            # MCP server configuration for Claude Code
 tests/               # pytest suite, including live Postgres coverage
 docs/                # Architecture docs and getting-started guide
 examples/            # Runnable usage examples
