@@ -119,7 +119,11 @@ class PostgresPgvectorAdapter:
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_records_validity ON {schema}.memory_records(valid_from, valid_to);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_relations_source ON {schema}.memory_relations(source_entity);",
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_relations_target ON {schema}.memory_relations(target_entity);",
-            f"CREATE INDEX IF NOT EXISTS idx_{schema}_chunks_embedding ON {schema}.memory_chunks USING hnsw (embedding vector_cosine_ops);",
+            *(
+                [f"CREATE INDEX IF NOT EXISTS idx_{schema}_chunks_embedding ON {schema}.memory_chunks USING hnsw (embedding vector_cosine_ops);"]
+                if dims <= 2000
+                else [f"CREATE INDEX IF NOT EXISTS idx_{schema}_chunks_embedding ON {schema}.memory_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);"]
+            ),
             f"CREATE INDEX IF NOT EXISTS idx_{schema}_projection_jobs_status ON {schema}.projection_jobs(status, updated_at);",
             f"CREATE OR REPLACE FUNCTION {schema}.notify_projection_job() RETURNS trigger AS $$ "
             f"BEGIN PERFORM pg_notify('{schema}_projection_jobs', NEW.record_id); RETURN NEW; END; "
@@ -692,7 +696,7 @@ class PostgresPgvectorAdapter:
         if namespace is not None:
             query += " AND namespace = %s"
             params.append(namespace)
-        with self._conn() as conn:
+        with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 return [(str(row[0]), str(row[1])) for row in cur.fetchall()]
@@ -710,7 +714,7 @@ class PostgresPgvectorAdapter:
         else:
             query = f"SELECT record_id, source_entity, relation_type, target_entity, weight FROM {schema}.memory_relations"
             params = []
-        with self._conn() as conn:
+        with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 return [(str(r[0]), str(r[1]), str(r[2]), str(r[3]), float(r[4])) for r in cur.fetchall()]

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+### Fixed
+- `list_all_texts()` and `list_all_relations()` in `PostgresPgvectorAdapter` called non-existent `self._conn()` — changed to `self.connect()`
+- Bootstrap index creation now uses IVFFlat for embedding dimensions >2000 (pgvector HNSW limit), instead of failing
+
 ## 1.0.0
 
 ### Breaking Changes
